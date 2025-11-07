@@ -23,7 +23,26 @@
             <field name="model">legal.regulation</field>
             <field name="arch" type="xml">
                 <form string="Peraturan Hukum">
+                    <header>
+                        <button name="action_download_pdf" type="object" string="Download PDF" 
+                                class="btn-primary" icon="fa-download"
+                                invisible="not file_pdf"/>
+                        <button name="action_reextract_pdf" type="object" string="Re-extract" 
+                                class="btn-warning" icon="fa-refresh"
+                                invisible="not file_txt and not file_docx and not file_pdf"
+                                help="Ekstrak ulang isi dari file TXT/DOCX/PDF dengan metode terbaru (layout-preserving)"/>
+                    </header>
                     <sheet>
+                        <div class="oe_button_box" name="button_box">
+                            <button class="oe_stat_button" icon="fa-file-text-o" 
+                                    invisible="not file_txt and not file_pdf">
+                                <div class="o_stat_info">
+                                    <field name="file_size" widget="integer" class="o_stat_value"/>
+                                    <span class="o_stat_text">KB</span>
+                                </div>
+                            </button>
+                        </div>
+                        
                         <div class="oe_title">
                             <h1>
                                 <field name="judul" placeholder="Judul Peraturan..."/>
@@ -57,6 +76,51 @@
                         </group>
                         
                         <notebook>
+                            <page string="File Dokumen">
+                                <group>
+                                    <group string="Upload File (Pilih Salah Satu)">
+                                        <field name="file_txt" filename="file_name" 
+                                               widget="binary"
+                                               options="{'accepted_file_extensions': '.txt'}"
+                                               help="Upload file TXT (Plain Text) - Paling Akurat &amp; Sederhana!"/>
+                                        <field name="file_docx" filename="file_name" 
+                                               widget="binary"
+                                               options="{'accepted_file_extensions': '.docx,.doc'}"
+                                               help="Upload file DOCX (Word) - Akan dikonversi ke PDF"/>
+                                        <field name="file_pdf" filename="file_name" 
+                                               widget="binary"
+                                               options="{'accepted_file_extensions': '.pdf'}"
+                                               help="Upload file PDF atau akan otomatis dikonversi dari DOCX"/>
+                                        <field name="file_name" invisible="1"/>
+                                    </group>
+                                    <group string="Info File">
+                                        <field name="file_size" readonly="1" string="Ukuran File (KB)"
+                                               invisible="not file_pdf and not file_docx and not file_txt"/>
+                                    </group>
+                                </group>
+                                <div class="alert alert-success" role="alert">
+                                    <p><i class="fa fa-lightbulb-o"/> <strong>Rekomendasi Format File:</strong></p>
+                                    <ul class="mb-2">
+                                        <li><strong>TXT (Plain Text)</strong> - ✅ <strong>Paling Disarankan!</strong>
+                                            <ul>
+                                                <li>Text extract 100% akurat, tidak ada bug spacing</li>
+                                                <li>Format paling sederhana dan handal</li>
+                                                <li>Mendukung berbagai encoding (UTF-8, UTF-16, CP1252, Latin-1)</li>
+                                            </ul>
+                                        </li>
+                                        <li><strong>DOCX (Word)</strong> - ✅ Bagus untuk formatting
+                                            <ul>
+                                                <li>Text extract 99% akurat</li>
+                                                <li>Otomatis dikonversi ke PDF untuk download user</li>
+                                            </ul>
+                                        </li>
+                                        <li><strong>PDF</strong> - ⚠️ Bisa ada bug spacing pada beberapa kata</li>
+                                    </ul>
+                                    <p class="mb-0">
+                                        <strong>Prioritas:</strong> Upload <strong>TXT</strong> (paling diutamakan) → <strong>DOCX</strong> (jika tidak ada TXT) → <strong>PDF</strong> (fallback)
+                                    </p>
+                                </div>
+                            </page>
                             <page string="Subjek &amp; Sumber">
                                 <group>
                                     <field name="subjek" nolabel="1" placeholder="Subjek/topik peraturan..."/>

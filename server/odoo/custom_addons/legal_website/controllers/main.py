@@ -112,6 +112,14 @@ class LegalWebsiteController(http.Controller):
                     </div>
                 </div>
 
+                <div class="row mt-5">
+                    <div class="col-12">
+                        <div class="alert alert-info text-center">
+                            <h5><i class="fas fa-info-circle"></i> Status: Working!</h5>
+                            <p class="mb-0">This page is now working! The subscription controller is loaded correctly.</p>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>

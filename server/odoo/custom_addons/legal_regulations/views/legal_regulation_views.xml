@@ -16,6 +16,10 @@
                     <field name="tanggal_penetapan"/>
                     <field name="status"/>
                     <field name="bidang"/>
+                    <field name="file_pdf" string="PDF" widget="binary" filename="file_name" 
+                           options="{'accepted_file_extensions': '.pdf'}" 
+                           column_invisible="True"/>
+                    <field name="file_name" column_invisible="True"/>
                     <field name="is_berlaku_aktif" invisible="1"/>
                 </list>
             </field>
@@ -28,12 +32,26 @@
             <field name="arch" type="xml">
                 <form string="Peraturan Hukum">
                     <header>
+                        <button name="action_download_pdf" type="object" string="Download PDF" 
+                                class="btn-primary" icon="fa-download"
+                                invisible="not file_pdf"/>
+                        <button name="action_reextract_pdf" type="object" string="Re-extract" 
+                                class="btn-warning" icon="fa-refresh"
+                                invisible="not file_txt and not file_docx and not file_pdf"
+                                help="Ekstrak ulang isi dari file TXT/DOCX/PDF dengan metode terbaru (layout-preserving)"/>
                         <field name="status" widget="statusbar" statusbar_visible="berlaku,diubah,dicabut"/>
                     </header>
                     <sheet>
                         <div class="oe_button_box" name="button_box">
                             <button name="toggle_active" type="object" class="oe_stat_button" icon="fa-archive">
                                 <field name="active" widget="boolean_button" options='{"terminology": "archive"}'/>
+                            </button>
+                            <button class="oe_stat_button" icon="fa-file-text-o" 
+                                    invisible="not file_pdf and not file_txt">
+                                <div class="o_stat_info">
+                                    <field name="file_size" widget="integer" class="o_stat_value"/>
+                                    <span class="o_stat_text">KB</span>
+                                </div>
                             </button>
                         </div>
                         
@@ -82,6 +100,45 @@
                                 <group>
                                     <field name="sumber" nolabel="1" placeholder="Sumber dokumen (BN, dll)..."/>
                                 </group>
+                            </page>
+                            <page string="File Dokumen">
+                                <group>
+                                    <group string="Upload File (Pilih Salah Satu)">
+                                        <field name="file_txt" filename="file_name" 
+                                               widget="binary"
+                                               options="{'accepted_file_extensions': '.txt'}"
+                                               help="Upload file TXT (Plain Text) - Paling Akurat!"/>
+                                        <field name="file_docx" filename="file_name" 
+                                               widget="binary"
+                                               options="{'accepted_file_extensions': '.docx,.doc'}"
+                                               help="Upload file DOCX (Word)"/>
+                                        <field name="file_pdf" filename="file_name" 
+                                               widget="binary"
+                                               options="{'accepted_file_extensions': '.pdf'}"
+                                               help="Upload file PDF"/>
+                                        <field name="file_name" invisible="1"/>
+                                    </group>
+                                    <group string="Info File">
+                                        <field name="file_size" readonly="1" string="Ukuran File (KB)"
+                                               invisible="not file_pdf and not file_docx and not file_txt"/>
+                                    </group>
+                                </group>
+                                <div class="alert alert-success" role="alert">
+                                    <p><i class="fa fa-lightbulb-o"/> <strong>Rekomendasi Format File:</strong></p>
+                                    <ul class="mb-2">
+                                        <li><strong>TXT (Plain Text)</strong> - ✅ <strong>Paling Disarankan!</strong>
+                                            <ul>
+                                                <li>Text extract 100% akurat, tidak ada bug spacing</li>
+                                                <li>Format paling sederhana dan handal</li>
+                                            </ul>
+                                        </li>
+                                        <li><strong>DOCX (Word)</strong> - ✅ Bagus untuk formatting</li>
+                                        <li><strong>PDF</strong> - ⚠️ Bisa ada bug spacing</li>
+                                    </ul>
+                                    <p class="mb-0">
+                                        <strong>Prioritas:</strong> TXT → DOCX → PDF
+                                    </p>
+                                </div>
                             </page>
                             <page string="Keterangan">
                                 <field name="keterangan" nolabel="1" placeholder="Keterangan tambahan..."/>

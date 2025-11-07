@@ -1,21 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
     <data noupdate="1">
-        <!-- Legal Type Data 
-        <record id="legal_type_peraturan" model="legal.type">
-            <field name="name">Peraturan</field>
-            <field name="description">Peraturan Hukum di Indonesia</field>
-            <field name="sequence">1</field>
-            <field name="color">1</field>
-        </record>
-
-        <record id="legal_type_putusan" model="legal.type">
-            <field name="name">Putusan</field>
-            <field name="description">Putusan Hukum di Indonesia</field>
-            <field name="sequence">2</field>
-            <field name="color">2</field>
-        </record> -->
-
         <!-- Legal Categories Data -->
         <record id="legal_category_pidana" model="legal.category">
             <field name="name">Hukum Pidana</field>
@@ -55,91 +40,11 @@
             <field name="name">KUHAP</field>
             <field name="color">2</field>
         </record>
-
-        <!-- Legal Level Data 
-        <record id="legal_level_uud1945" model="legal.level">
+        
+        <record id="legal_tag_uud" model="legal.tag">
             <field name="name">UUD 1945</field>
-            <field name="description">Undang - Undang Dasar 1945</field>
-            <field name="sequence">1</field>
-            <field name="color">1</field>
-        </record>
-
-        <record id="legal_level_tapMpr" model="legal.level">
-            <field name="name">TAP MPR</field>
-            <field name="description">Ketetapan Majelis Permusyawaratan Rakyat</field>
-            <field name="sequence">2</field>
-            <field name="color">2</field>
-        </record>
-
-        <record id="legal_level_uu" model="legal.level">
-            <field name="name">UU</field>
-            <field name="description">Undang - Undang</field>
-            <field name="sequence">3</field>
             <field name="color">3</field>
         </record>
-
-        <record id="legal_level_perpu" model="legal.level">
-            <field name="name">Perpu</field>
-            <field name="description">Peraturan Pemerintah Pengganti Undang - Undang</field>
-            <field name="sequence">4</field>
-            <field name="color">4</field>
-        </record>
-
-        <record id="legal_level_pp" model="legal.level">
-            <field name="name">PP</field>
-            <field name="description">Peraturan Pemerintah</field>
-            <field name="sequence">5</field>
-            <field name="color">5</field>
-        </record>
-
-        <record id="legal_level_perpres" model="legal.level">
-            <field name="name">Perpres</field>
-            <field name="description">Peraturan Presiden</field>
-            <field name="sequence">6</field>
-            <field name="color">6</field>
-        </record>
-
-        <record id="legal_level_keppres" model="legal.level">
-            <field name="name">Keppres</field>
-            <field name="description">Keputusan Presiden</field>
-            <field name="sequence">7</field>
-            <field name="color">7</field>
-        </record>
-
-        <record id="legal_level_inpres" model="legal.level">
-            <field name="name">Inpres</field>
-            <field name="description">Instruksi Presiden</field>
-            <field name="sequence">8</field>
-            <field name="color">8</field>
-        </record>
-
-        <record id="legal_level_permen" model="legal.level">
-            <field name="name">Permen</field>
-            <field name="description">Peraturan Kementrian</field>
-            <field name="sequence">9</field>
-            <field name="color">9</field>
-        </record>
-
-        <record id="legal_level_kepmen" model="legal.level">
-            <field name="name">Kepmen</field>
-            <field name="description">Keputusan Menteri</field>
-            <field name="sequence">10</field>
-            <field name="color">10</field>
-        </record>
-
-        <record id="legal_level_perda" model="legal.level">
-            <field name="name">Perda</field>
-            <field name="description">Peraturan Daerah</field>
-            <field name="sequence">11</field>
-            <field name="color">11</field>
-        </record>
-
-        <record id="legal_level_pergub" model="legal.level">
-            <field name="name">Pergub</field>
-            <field name="description">Peraturan Gubernur</field>
-            <field name="sequence">13</field>
-            <field name="color">13</field>
-        </record> -->
         
         <!-- Sample Legal Articles -->
         <record id="legal_article_sample_1" model="legal.article">

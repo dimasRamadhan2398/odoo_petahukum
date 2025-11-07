@@ -9,7 +9,6 @@
                 <list string="Legal Articles">
                     <field name="name"/>
                     <field name="category_id"/>
-                    <!-- <field name="type_id"/> -->
                     <field name="author_id"/>
                     <field name="publish_date"/>
                     <field name="view_count"/>
@@ -28,7 +27,6 @@
                             <group>
                                 <field name="name" placeholder="Judul artikel..."/>
                                 <field name="category_id"/>
-                                <!-- <field name="type_id"/> -->
                                 <field name="tag_ids" widget="many2many_tags"/>
                                 <field name="author_id"/>
                             </group>
@@ -55,37 +53,6 @@
                 </form>
             </field>
         </record>
-
-        <!-- Legal Type Views 
-        <record id="legal_type_view_tree" model="ir.ui.view">
-            <field name="name">legal.type.tree</field>
-            <field name="model">legal_type</field>
-            <field name="arch" type="xml">
-                <list string="Legal Type">
-                    <field name="sequence" widget="handle"/>
-                    <field name="name"/>
-                    <field name="article_count"/>
-                    <field name="color" widget="color"/>
-                </list>
-            </field>
-        </record>
-
-        <record id="legal_type_view_form" model="ir.ui.view">
-            <field name="name">legal_type.form</field>
-            <field name="model">legal.type</field>
-            <field name="arch" type="xml">
-                <form string="Legal Type">
-                    <sheet>
-                        <group>
-                            <field name="name"/>
-                            <field name="description"/>
-                            <field name="sequence"/>
-                            <field name="color" widget="color"/>
-                        </group>
-                    </sheet>
-                </form>
-            </field>
-        </record> -->
 
         <!-- Legal Category Views -->
         <record id="legal_category_view_tree" model="ir.ui.view">

@@ -56,12 +56,6 @@
                             </div>
                         </div>
                     </section>
-
-                    <section class="legal-type py-5">
-                        <div class="container">
-                            <h2 class="text-center mb-5">Type</h2>
-                        </div>
-                    </section>
                     
                     <!-- Featured Articles Section -->
                     <section class="legal-featured-articles py-5 bg-light">
@@ -122,6 +116,9 @@
                                     </div>
                                     <h4>Database Lengkap</h4>
                                     <p class="text-muted">Akses ke database hukum terlengkap termasuk KUHP, KUHAP, dan peraturan terbaru.</p>
+                                    <a href="/regulations" class="btn btn-outline-success btn-sm mt-2">
+                                        <i class="fa fa-gavel me-1"></i>Lihat Peraturan
+                                    </a>
                                 </div>
                                 <div class="col-md-4 text-center mb-4">
                                     <div class="legal-feature-icon bg-warning text-white rounded-circle mx-auto mb-3 d-flex align-items-center justify-content-center" style="width: 80px; height: 80px;">

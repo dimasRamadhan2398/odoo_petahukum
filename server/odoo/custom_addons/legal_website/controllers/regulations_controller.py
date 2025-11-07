@@ -34,17 +34,32 @@ class LegalRegulationWebsiteController(http.Controller):
                 
             if kw.get('search'):
                 search_term = kw.get('search')
-                # Enhanced search
-                domain.extend(['|', '|', '|', '|', '|', '|', '|', '|',
-                              ('judul', 'ilike', search_term),
-                              ('nomor', 'ilike', search_term), 
-                              ('bentuk_singkat', 'ilike', search_term),
-                              ('subjek', 'ilike', search_term),
-                              ('keterangan', 'ilike', search_term),
-                              ('isi_peraturan', 'ilike', search_term),
-                              ('kata_kunci', 'ilike', search_term),
-                              ('ringkasan', 'ilike', search_term),
-                              ('bentuk', 'ilike', search_term)])
+                # cek field yang tersedia
+                search_fields = [
+                    ('judul', 'ilike', search_term),
+                    ('nomor', 'ilike', search_term), 
+                    ('bentuk_singkat', 'ilike', search_term),
+                    ('subjek', 'ilike', search_term),
+                    ('keterangan', 'ilike', search_term),
+                    ('bentuk', 'ilike', search_term)
+                ]
+                
+                # Tambahkan field enhanced jika ada
+                try:
+                    model_fields = request.env['legal.regulation']._fields
+                    if 'isi_peraturan' in model_fields:
+                        search_fields.append(('isi_peraturan', 'ilike', search_term))
+                    if 'kata_kunci' in model_fields:
+                        search_fields.append(('kata_kunci', 'ilike', search_term))
+                    if 'ringkasan' in model_fields:
+                        search_fields.append(('ringkasan', 'ilike', search_term))
+                except:
+                    pass
+                
+                # Build domain dengan OR conditions
+                if len(search_fields) > 1:
+                    or_conditions = ['|'] * (len(search_fields) - 1)
+                    domain.extend(or_conditions + search_fields)
 
             # Pagination
             limit = 20
@@ -163,19 +178,34 @@ class LegalRegulationWebsiteController(http.Controller):
             if len(query) < 3:
                 return {'results': []}
 
-            # Enhanced search
-            domain = [
-                '|', '|', '|', '|', '|', '|', '|', '|',
+            # Enhanced search for AJAX
+            search_fields = [
                 ('judul', 'ilike', query),
                 ('nomor', 'ilike', query),
                 ('bentuk_singkat', 'ilike', query),
                 ('subjek', 'ilike', query),
                 ('keterangan', 'ilike', query),
-                ('isi_peraturan', 'ilike', query),
-                ('kata_kunci', 'ilike', query),
-                ('ringkasan', 'ilike', query),
                 ('bentuk', 'ilike', query)
             ]
+            
+            # Tambahkan field enhanced jika ada
+            try:
+                model_fields = request.env['legal.regulation']._fields
+                if 'isi_peraturan' in model_fields:
+                    search_fields.append(('isi_peraturan', 'ilike', query))
+                if 'kata_kunci' in model_fields:
+                    search_fields.append(('kata_kunci', 'ilike', query))
+                if 'ringkasan' in model_fields:
+                    search_fields.append(('ringkasan', 'ilike', query))
+            except:
+                pass
+            
+            # Build domain
+            if len(search_fields) > 1:
+                or_conditions = ['|'] * (len(search_fields) - 1)
+                domain = or_conditions + search_fields
+            else:
+                domain = search_fields
 
             regulations = request.env['legal.regulation'].sudo().search(domain, limit=10)
             
