@@ -166,6 +166,220 @@ class LegalRegulation(models.Model):
             else:
                 record.file_size = 0
     
+    def _merge_broken_lines(self, text):
+        """
+        Merge lines that are incorrectly broken in the middle of sentences.
+        Uses multi-pass approach to handle consecutive broken lines.
+        IMPORTANT: Does NOT merge lines in Penjelasan section to preserve structure.
+        Rules:
+        1. Merge if line doesn't end with sentence terminators (., ;, :)
+        2. Merge if next line continues numbering/legal references
+        3. Don't merge if next line is a new section header (BAB, PASAL, etc.)
+        4. Don't merge if next line starts with list markers ((1), a., etc.)
+        5. Don't merge anything inside PENJELASAN section
+        """
+        import re
+        
+        _logger.info("=" * 80)
+        _logger.info("MERGING BROKEN SENTENCES (MULTI-PASS)")
+        _logger.info("=" * 80)
+        
+        # FIRST: Split text into main content and penjelasan section
+        penjelasan_start_pattern = re.compile(r'^(PENJELASAN\s+ATAS|PENJELASAN|Penjelasan)\s*$', re.IGNORECASE)
+        
+        lines = text.split('\n')
+        main_content_lines = []
+        penjelasan_lines = []
+        in_penjelasan = False
+        
+        for line in lines:
+            if penjelasan_start_pattern.match(line.strip()):
+                in_penjelasan = True
+                penjelasan_lines.append(line)
+            elif in_penjelasan:
+                penjelasan_lines.append(line)
+            else:
+                main_content_lines.append(line)
+        
+        if penjelasan_lines:
+            _logger.info(f"✓ Found Penjelasan section with {len(penjelasan_lines)} lines - will NOT merge these")
+            _logger.info(f"✓ Main content has {len(main_content_lines)} lines - will merge these")
+        
+        # SECOND: Only merge main content (NOT penjelasan)
+        text_to_merge = '\n'.join(main_content_lines)
+        
+        total_merges = 0
+        pass_num = 0
+        max_passes = 5  # Prevent infinite loop
+        
+        # Keep merging until no more merges possible (multi-pass)
+        while pass_num < max_passes:
+            pass_num += 1
+            lines = text_to_merge.split('\n')
+            merged_lines = []
+            i = 0
+            merge_count = 0
+            
+            _logger.info(f"Pass #{pass_num}: Processing {len(lines)} lines...")
+            
+            # Patterns that indicate a NEW section/item (should NOT be merged with previous line)
+            new_section_patterns = [
+                r'^\s*(BAB|BAGIAN|PARAGRAF)\s+',  # BAB I, BAGIAN PERTAMA, etc.
+                r'^\s*Pasal\s+\d+[A-Z]?\s*$',  # Standalone "Pasal 1" or "Pasal 45A" (with optional letter suffix)
+                r'^\s*Pasal\s+[IVX]+\s*$',  # Standalone "Pasal I", "Pasal II" (Roman numerals)
+                r'^\s*\(\d+\)\s+\w',  # List items like (1) text
+                r'^\s*[a-z]\.\s+\w',  # List items like a. text
+                r'^\s*\d+\.\s+[A-Z]',  # List items like 1. Text (capitalized)
+                r'^\s*(Mengingat|Menimbang|Memperhatikan|Menetapkan|Memutuskan|MEMUTUSKAN)\s*:',  # Legal headers
+                r'^\s*DENGAN\s+RAHMAT',  # Opening phrase
+                r'^\s*PRESIDEN\s+REPUBLIK',  # Title
+                r'^\s*PENJELASAN',  # Penjelasan section
+                r'^\s*I\.?\s+UMUM',  # I. UMUM
+                r'^\s*II\.?\s+PASAL',  # II. PASAL DEMI PASAL
+            ]
+            
+            # CRITICAL: Pattern for standalone Pasal that should NEVER be merged with next line
+            # Support both numeric (1, 2, 45A) and Roman numerals (I, II, III, IV, V)
+            standalone_pasal_pattern = re.compile(r'^\s*Pasal\s+(?:\d+[A-Z]?|[IVX]+)\s*$', re.IGNORECASE)
+            
+            # Sentence terminators - if line ends with these, it's complete
+            sentence_terminators = re.compile(r'[.;:]\s*$')
+        
+            while i < len(lines):
+                current_line = lines[i]
+                current_stripped = current_line.strip()
+                
+                # Skip empty lines
+                if not current_stripped:
+                    merged_lines.append(current_line)
+                    i += 1
+                    continue
+                
+                # CRITICAL FIX: If current line is standalone Pasal (e.g., "Pasal 45B"), NEVER merge it
+                if standalone_pasal_pattern.match(current_stripped):
+                    merged_lines.append(current_line)
+                    i += 1
+                    _logger.info(f"  ✓ Preserving standalone Pasal header: '{current_stripped}'")
+                    continue
+                
+                # Check if we should merge with next line
+                should_merge = False
+                
+                if i + 1 < len(lines):
+                    next_line = lines[i + 1].strip()
+                    
+                    # Skip if next line is empty
+                    if not next_line:
+                        merged_lines.append(current_line)
+                        i += 1
+                        continue
+                    
+                    # Check if next line is a new section (NEVER merge if true)
+                    is_new_section = False
+                    for pattern in new_section_patterns:
+                        if re.match(pattern, next_line, re.IGNORECASE):
+                            is_new_section = True
+                            break
+                    
+                    if is_new_section:
+                        # Next line is a new section - don't merge
+                        merged_lines.append(current_line)
+                        i += 1
+                        continue
+                    
+                    # FIX: Jika line adalah nomor (ex: '8.') dan next line bukan header Pasal → merge
+                    if re.match(r'^\s*\d+\.\s*$', current_stripped):
+                        if not re.match(r'^\s*Pasal\s+\d+[A-Z]?', next_line, re.IGNORECASE):
+                            should_merge = True
+                            merge_reason = "numeric index continuation"
+                    
+                    # Rule 6: Next line starts with number/letter that continues previous reference
+                    # Example: "pasal 28F, pasal" (line break) "28G ayat (1)"
+                    # CHECK THIS FIRST - highest priority for legal references
+                    if re.match(r'^\s*\d+[A-Z]?\s+(ayat|huruf)', next_line, re.IGNORECASE):
+                        should_merge = True
+                        merge_reason = "reference continuation (ayat/huruf)"
+                    
+                    # Rule 7: Next line starts with "pasal" + number (continuing list of references)
+                    # Example: "pasal 28F," (line break) "pasal 28G ayat (1)"
+                    elif re.match(r'^\s*pasal\s+\d', next_line, re.IGNORECASE):
+                        should_merge = True
+                        merge_reason = "pasal reference continuation"
+                    
+                    # Rule 8: Next line starts with "dan pasal" or ", pasal"
+                    elif re.match(r'^\s*(dan\s+)?pasal\s+\d', next_line, re.IGNORECASE):
+                        should_merge = True
+                        merge_reason = "dan pasal continuation"
+                    
+                    # Rule 5: Next line starts with continuation word (dan, atau, serta)
+                    elif re.match(r'^\s*(dan|atau|serta|maupun)\s+', next_line, re.IGNORECASE):
+                        should_merge = True
+                        merge_reason = "continuation word"
+                    
+                    # Rule 2: Current line ends with comma and next continues
+                    elif current_stripped.endswith(','):
+                        should_merge = True
+                        merge_reason = "comma continuation"
+                    
+                    # Rule 3: Special legal reference patterns
+                    # Current line ends with incomplete reference marker
+                    elif re.search(r'\b(pasal|ayat|huruf|nomor|tahun|undang-undang)\s*$', current_stripped, re.IGNORECASE):
+                        should_merge = True
+                        merge_reason = "incomplete legal reference"
+                    
+                    # Rule 4: Current line ends with open parenthesis or incomplete parenthesis
+                    elif re.search(r'\([^)]*$', current_stripped):
+                        should_merge = True
+                        merge_reason = "incomplete parenthesis"
+                    
+                    # Rule 1: Current line doesn't end with sentence terminator (lowest priority)
+                    elif not sentence_terminators.search(current_stripped):
+                        should_merge = True
+                        merge_reason = "no sentence terminator"
+                    
+                    # Perform merge if needed
+                    if should_merge:
+                        merged_line = current_line.rstrip() + ' ' + next_line
+                        merged_lines.append(merged_line)
+                        merge_count += 1
+                        
+                        # Log only first 5 merges per pass to avoid spam
+                        if merge_count <= 5:
+                            _logger.info(f"  ✓ Merge #{merge_count} ({merge_reason}) at line {i}:")
+                            _logger.info(f"    '{current_stripped[:50]}...'")
+                            _logger.info(f"    + '{next_line[:50]}...'")
+                        
+                        i += 2  # Skip next line since we merged it
+                        continue
+                
+                # No merge - add current line as-is
+                merged_lines.append(current_line)
+                i += 1
+            
+            # Update text for next pass
+            text_to_merge = '\n'.join(merged_lines)
+            total_merges += merge_count
+            
+            _logger.info(f"  Pass #{pass_num} complete: {merge_count} merges")
+            
+            # If no merges in this pass, we're done
+            if merge_count == 0:
+                break
+        
+        _logger.info(f"✅ Sentence merging complete: {total_merges} total merges in {pass_num} passes")
+        
+        # THIRD: Reconstruct full text with merged main content + untouched penjelasan
+        if penjelasan_lines:
+            final_text = text_to_merge + '\n' + '\n'.join(penjelasan_lines)
+            _logger.info(f"✓ Reconstructed text: {len(text_to_merge.split(chr(10)))} main lines + {len(penjelasan_lines)} penjelasan lines")
+        else:
+            final_text = text_to_merge
+            _logger.info(f"✓ No Penjelasan section found, returning merged text only")
+        
+        _logger.info("=" * 80)
+        
+        return final_text
+
     def _fix_broken_words(self, text):
         """Fix words that are broken with spaces in the middle"""
         import re
@@ -232,6 +446,26 @@ class LegalRegulation(models.Model):
         
         return text
     
+    def _is_standalone_pasal(self, stripped):
+        """
+        Return True jika baris adalah header Pasal VALID:
+        Contoh valid:
+            'Pasal 45'
+            'PASAL 45A'
+            'Pasal 5B'
+            'Pasal I'
+            'Pasal II'
+            
+        Return False jika:
+            'PASAL 45B SETIAP ORANG ...'
+            'Pasal 45 berbunyi sebagai berikut:'
+            'Ketentuan Pasal 45A ...'
+        """
+        import re
+        # cocokkan pasal yang berdiri sendiri (numeric atau Roman numeral)
+        m = re.match(r'^(Pasal|PASAL)\s+(?:\d+[A-Z]?|[IVX]+)\s*$', stripped)
+        return bool(m)
+    
     def _format_text_to_html(self, text):
         """Format extracted text into properly structured HTML"""
         import re
@@ -250,17 +484,25 @@ class LegalRegulation(models.Model):
         # Patterns untuk mendeteksi struktur
         # Pattern untuk numbering
         numbering_pattern = re.compile(r'^\s*(\d+\.|[a-z]\.|[A-Z]\.|[ivxIVX]+\.|[(\d]+[\).]|[(\w]+[\).])\s+(.+)$')
-        # Pattern untuk BAB, Pasal, Ayat, dll
-        section_pattern = re.compile(r'^\s*(BAB|PASAL|Pasal|Ayat|Bagian|Paragraf|BAGIAN|PARAGRAF)\s+(.+)$', re.IGNORECASE)
+        # Pattern untuk BAB, Pasal (with optional letter suffix like 45A), Ayat, dll
+        section_pattern = re.compile(r'^\s*(BAB|PASAL|Pasal\s+\d+[A-Z]?|Ayat|Bagian|Paragraf|BAGIAN|PARAGRAF)(\s+(.+))?$', re.IGNORECASE)
         # Pattern untuk header (ALL CAPS line)
         header_pattern = re.compile(r'^[A-Z\s]{10,}$')
-        # Pattern untuk Mengingat:, Menimbang:, dll
-        legal_intro_pattern = re.compile(r'^\s*(Mengingat|Menimbang|Memperhatikan|Menetapkan|Memutuskan|Dengan Rahmat)\s*:\s*(.*)$', re.IGNORECASE)
+        # Pattern untuk Mengingat/Menimbang - detect dengan atau tanpa titik dua
+        # Akan di-check pertama untuk priority tinggi
+        legal_intro_combined_pattern = re.compile(r'^\s*(Mengingat|Menimbang|Memperhatikan|Menetapkan|Memutuskan|Dengan Rahmat)\s*:?\s*(.*)$', re.IGNORECASE)
         
         # State for penjelasan block rendering
         in_penjelasan_block = False
         penjelasan_lines = []
+        # Pattern for Pasal/Ayat/Huruf penjelasan
         penjelasan_header_pat = re.compile(r'^\s*💡 \[Penjelasan\s+(Pasal|Ayat|Huruf)[^\]]*\]:\s*$', re.IGNORECASE)
+        # Pattern for Penjelasan Umum
+        penjelasan_umum_pat = re.compile(r'^\s*📘 \[Penjelasan Umum\]:\s*$', re.IGNORECASE)
+        # Pattern for alternative Penjelasan Umum format: "I. UMUM"
+        penjelasan_umum_alternative_pat = re.compile(r'^\s*I\.\s+UMUM\s*$', re.IGNORECASE)
+        # Pattern for subtitle "Dalam Undang-Undang ini yang dimaksud dengan:"
+        subtitle_pattern = re.compile(r'^\s*Dalam\s+Undang-Undang\s+ini\s+yang\s+dimaksud\s+dengan:\s*$', re.IGNORECASE)
 
         def flush_current_paragraph():
             nonlocal current_paragraph, in_list
@@ -286,13 +528,27 @@ class LegalRegulation(models.Model):
                 return
             # First line is header, rest is content
             header = penjelasan_lines[0].strip() if penjelasan_lines else ''
-            content = ' '.join([ln.strip() for ln in penjelasan_lines[1:]]).strip()
-            # Render styled block; keep simple structure
+            # Join content lines
+            content_raw = ' '.join([ln.strip() for ln in penjelasan_lines[1:]]).strip()
+            
+            # Split by sentence breaks (. followed by capital letter) and wrap in <p> tags
+            # This creates paragraph spacing without breaking the blue box
+            paragraphs = re.split(r'\.\s+(?=[A-Z])', content_raw)
+            content_html = ''
+            for para in paragraphs:
+                if para.strip():
+                    # Add period back if it was removed by split
+                    para_text = para.strip()
+                    if not para_text.endswith('.'):
+                        para_text += '.'
+                    content_html += f'<p style="margin: 8px 0;">{para_text}</p>'
+            
+            # Render styled block
             html_parts.append(
                 '<div class="penjelasan" style="margin-top: 0.5rem; margin-bottom: 0.75rem; padding: 8px 12px; '
                 'background: #f4f8ff; border-left: 4px solid #0d6efd; border-radius: 2px;">'
-                f'<div style="font-weight: 600; color: #0d6efd;">{header}</div>'
-                f'{(f"<div style=\"margin-top: 4px;\">{content}</div>" if content else "")}'
+                f'<div style="font-weight: 600; color: #0d6efd; margin-bottom: 8px;">{header}</div>'
+                f'{content_html if content_html else ""}'
                 '</div>'
             )
             penjelasan_lines = []
@@ -315,15 +571,19 @@ class LegalRegulation(models.Model):
                     penjelasan_lines.append(line)
                     continue
 
-            # Start of a penjelasan block
-            if penjelasan_header_pat.match(stripped):
+            # Start of a penjelasan block (either Pasal/Ayat/Huruf or Umum)
+            if penjelasan_header_pat.match(stripped) or penjelasan_umum_pat.match(stripped) or penjelasan_umum_alternative_pat.match(stripped):
                 # Flush any open paragraph or list before starting
                 flush_current_paragraph()
                 if in_list:
                     html_parts.append('</ul>')
                     in_list = False
                 in_penjelasan_block = True
-                penjelasan_lines = [line]
+                # For "I. UMUM" format, convert to standard format
+                if penjelasan_umum_alternative_pat.match(stripped):
+                    penjelasan_lines = ['📘 [Penjelasan Umum]:']
+                else:
+                    penjelasan_lines = [line]
                 continue
 
             # Preserve empty lines as paragraph breaks
@@ -357,8 +617,66 @@ class LegalRegulation(models.Model):
                     in_list = False
                 continue
             
-            # Check for legal document intro patterns (Mengingat:, Menimbang:, etc.)
-            legal_intro_match = legal_intro_pattern.match(stripped)
+            # SPECIAL CASE: Check if line contains legal intro word but doesn't start with it
+            # E.g., "PRESIDEN REPUBLIK INDONESIA, Menimbang" or "SK No 190185 A Mengingat"
+            legal_intro_words = ['Mengingat', 'Menimbang', 'Memperhatikan', 'Menetapkan', 'Memutuskan', 'Dengan Rahmat']
+            split_handled = False
+            for intro_word in legal_intro_words:
+                # Check if intro word appears but not at start (case-insensitive)
+                # Pattern 1: With comma before intro word
+                intro_pattern_with_comma = re.compile(r'^(.+?)\s*,\s*(' + intro_word + r')\b', re.IGNORECASE)
+                # Pattern 2: Without comma - intro word at end of line after some text
+                intro_pattern_no_comma = re.compile(r'^(.+?)\s+(' + intro_word + r')\s*:?\s*$', re.IGNORECASE)
+                
+                split_match = intro_pattern_with_comma.match(stripped) or intro_pattern_no_comma.match(stripped)
+                if split_match:
+                    # Found intro word after other text - split the line
+                    before_part = split_match.group(1).strip()
+                    intro_part = split_match.group(2).strip()
+                    
+                    # Make sure before_part is not empty and intro_part is actually the intro word
+                    # Also check that before_part doesn't look like it's part of the intro phrase
+                    if not before_part or len(before_part) < 3:
+                        break
+                    
+                    # Process the "before" part first
+                    if current_paragraph:
+                        current_paragraph.append((before_part, indent_px))
+                    else:
+                        current_paragraph = [(before_part, indent_px)]
+                    
+                    # Flush current paragraph
+                    if isinstance(current_paragraph[0], tuple):
+                        para_text = ' '.join([item[0] if isinstance(item, tuple) else item for item in current_paragraph])
+                        indent_px_para = current_paragraph[0][1] if isinstance(current_paragraph[0], tuple) else 0
+                    else:
+                        para_text = ' '.join(current_paragraph)
+                        indent_px_para = 0
+                    
+                    if in_list:
+                        html_parts.append(f'<li style="margin-bottom: 0.5rem; padding-left: 2rem; text-indent: -2rem;">{para_text}</li>')
+                    else:
+                        if indent_px_para > 0:
+                            html_parts.append(f'<p style="margin-left: {indent_px_para}px;">{para_text}</p>')
+                        else:
+                            html_parts.append(f'<p>{para_text}</p>')
+                    current_paragraph = []
+                    
+                    if in_list:
+                        html_parts.append('</ul>')
+                        in_list = False
+                    
+                    # Now add the intro word as heading
+                    html_parts.append(f'<h6 class="mt-3 mb-2"><strong>{intro_part}:</strong></h6>')
+                    split_handled = True
+                    break  # Break from for loop
+            
+            if split_handled:
+                continue  # Continue to next line
+            
+            # Check for legal document intro patterns (Mengingat, Menimbang, etc.)
+            # Works with or without colon - HIGH PRIORITY check
+            legal_intro_match = legal_intro_combined_pattern.match(stripped)
             if legal_intro_match:
                 if current_paragraph:
                     # Extract text and indentation
@@ -384,10 +702,16 @@ class LegalRegulation(models.Model):
                     in_list = False
                 
                 intro_word = legal_intro_match.group(1)
-                rest = legal_intro_match.group(2).strip()
+                rest = legal_intro_match.group(2).strip() if legal_intro_match.group(2) else ''
                 
-                # Add the intro as a heading
-                html_parts.append(f'<h6 class="mt-3 mb-2"><strong>{intro_word}:</strong></h6>')
+                # Check if original had colon - preserve it in heading
+                has_colon = ':' in line and line.index(':') < line.index(intro_word) + len(intro_word) + 3
+                if has_colon or rest:
+                    # Had colon or has content after - add colon in heading
+                    html_parts.append(f'<h6 class="mt-3 mb-2"><strong>{intro_word}:</strong></h6>')
+                else:
+                    # No colon, standalone - add without colon
+                    html_parts.append(f'<h6 class="mt-3 mb-2"><strong>{intro_word}</strong></h6>')
                 
                 # Check if there's numbering right after
                 if rest and numbering_pattern.match(rest):
@@ -405,9 +729,31 @@ class LegalRegulation(models.Model):
                 
                 continue
             
+            # Check for subtitle pattern "Dalam Undang-Undang ini yang dimaksud dengan:"
+            subtitle_match = subtitle_pattern.match(stripped)
+            if subtitle_match:
+                if current_paragraph:
+                    flush_current_paragraph()
+                
+                if in_list:
+                    html_parts.append('</ul>')
+                    in_list = False
+                
+                # Render as italic paragraph (not bold, like Penjelasan Umum style)
+                html_parts.append(f'<p style="font-style: italic; margin-top: 10px; margin-bottom: 10px; color: #555;">{stripped}</p>')
+                continue
+            
             # Check for section headers (BAB, PASAL, etc.)
             section_match = section_pattern.match(stripped)
-            if section_match:
+            
+            # --- FIX: Hanya treat sebagai header jika PASAL berdiri sendiri ---
+            skip_section_header = False
+            # Support both numeric (Pasal 1, Pasal 45A) and Roman (Pasal I, Pasal II)
+            pasal_standalone_pattern = re.compile(r'^(Pasal|PASAL)\s+(?:\d+[A-Z]?|[IVX]+)\s*$', re.IGNORECASE)
+            is_pasal_line = pasal_standalone_pattern.match(stripped)
+            
+            if section_match and is_pasal_line:
+                # Ini adalah "Pasal 45" atau "Pasal 45B" standalone - treat as header
                 if current_paragraph:
                     # Extract text and indentation
                     if isinstance(current_paragraph[0], tuple):
@@ -433,6 +779,40 @@ class LegalRegulation(models.Model):
                 
                 html_parts.append(f'<h5 class="mt-3 mb-2"><strong>{stripped}</strong></h5>')
                 continue
+            elif section_match and not is_pasal_line:
+                # Section header lain (BAB, BAGIAN, dll) atau Pasal dengan teks tambahan
+                # Jika Pasal dengan teks (ex: "Pasal 45B Setiap Orang"), treat sebagai paragraf
+                if re.match(r'^(Pasal|PASAL)\s+\d+[A-Z]?\s+\w', stripped, re.IGNORECASE):
+                    # "Pasal 45B Setiap..." - treat as paragraph, not header
+                    current_paragraph.append((stripped, 0))
+                    continue
+                else:
+                    # BAB, BAGIAN, etc - treat as header
+                    if current_paragraph:
+                        # Extract text and indentation
+                        if isinstance(current_paragraph[0], tuple):
+                            para_text = ' '.join([item[0] if isinstance(item, tuple) else item for item in current_paragraph])
+                            indent_px = current_paragraph[0][1] if isinstance(current_paragraph[0], tuple) else 0
+                        else:
+                            para_text = ' '.join(current_paragraph)
+                            indent_px = 0
+                        
+                        if in_list:
+                            html_parts.append(f'<li style="margin-bottom: 0.5rem; padding-left: 2rem; text-indent: -2rem;">{para_text}</li>')
+                        else:
+                            # Only add margin if there's actual indentation
+                            if indent_px > 0:
+                                html_parts.append(f'<p style="margin-left: {indent_px}px;">{para_text}</p>')
+                            else:
+                                html_parts.append(f'<p>{para_text}</p>')
+                        current_paragraph = []
+                    
+                    if in_list:
+                        html_parts.append('</ul>')
+                        in_list = False
+                    
+                    html_parts.append(f'<h5 class="mt-3 mb-2"><strong>{stripped}</strong></h5>')
+                    continue
             
             # Check for ALL CAPS header
             if len(stripped) > 10 and header_pattern.match(stripped):
@@ -464,7 +844,8 @@ class LegalRegulation(models.Model):
             
             # Check for numbered/lettered lists - PRESERVE ORIGINAL FORMAT
             numbering_match = numbering_pattern.match(stripped)
-            if numbering_match:
+            # Exception: "I. UMUM" should NOT be treated as numbering (will be handled by penjelasan check above)
+            if numbering_match and not penjelasan_umum_alternative_pat.match(stripped):
                 if current_paragraph:
                     # Extract text and indentation
                     if isinstance(current_paragraph[0], tuple):
@@ -1111,26 +1492,105 @@ class LegalRegulation(models.Model):
         try:
             lines = text.split('\n')
             result_lines = []
-            penjelasan_map = {}  # key: "pasal_X", "pasal_X_ayat_Y", "pasal_X_ayat_Y_huruf_Z"
+            penjelasan_map = {}  # key: "pasal_X", "pasal_X_ayat_Y", "pasal_X_ayat_Y_huruf_Z", "umum"
             in_penjelasan_section = False
             current_penjelasan_context = {'pasal': None, 'ayat': None}
             current_penjelasan_key = None
             current_penjelasan_buffer = []
             
             # Regex patterns for detecting Penjelasan section
-            penjelasan_section_pat = re.compile(r'^(PENJELASAN\s+ATAS|Penjelasan)\s*$', re.IGNORECASE)
+            penjelasan_section_pat = re.compile(r'^(PENJELASAN\s+ATAS|PENJELASAN|Penjelasan)\s*$', re.IGNORECASE)
+            
+            # Pattern for "I. UMUM" or variations
+            umum_pattern = re.compile(r'^\s*I\.?\s*UMUM\s*$', re.IGNORECASE)
+            pasal_demi_pasal_pattern = re.compile(r'^\s*II\.?\s*PASAL\s+DEMI\s+PASAL\s*$', re.IGNORECASE)
             
             # Patterns in Penjelasan section
-            pasal_in_penjelasan_pat = re.compile(r'^Pasal\s+(\d+)\s*$', re.IGNORECASE)
-            # FIXED: Support both "Ayat (1)" in main content and "Ayat 1" in Penjelasan section
-            ayat_header_pat = re.compile(r'^Ayat\s+\(?(\d+)\)?\s*$', re.IGNORECASE)
+            pasal_in_penjelasan_pat = re.compile(r'^Pasal\s+(\d+[A-Z]?)\s*$', re.IGNORECASE)  # Match "Pasal 1" or "Pasal 45A"
+            # SPECIAL: Also match Pasal with 3 digits (for OCR errors like "Pasal 458")
+            pasal_3digit_pat = re.compile(r'^Pasal\s+(\d{3})\s*$', re.IGNORECASE)  # Match "Pasal 458", "Pasal 457"
+            # ALTERNATIVE: Match "Pasal 1." (with period) - old format - can have content after period on same line
+            pasal_with_period_pat = re.compile(r'^Pasal\s+(\d+[A-Z]?)\.\s*(.*)$', re.IGNORECASE)  # Match "Pasal 1." or "Pasal 1. content"
+            
+            # Pattern to detect multi-pasal format (e.g., "Pasal 5, 6 dan 7.") - NOT a header, should be skipped
+            multi_pasal_pat = re.compile(r'^Pasal\s+[\d,\s]+dan\s+\d+\s*\.?\s*$', re.IGNORECASE)
+            
+            # FIXED: Support "Ayat (1)", "Ayat 1", "Ayat (2a)", "Ayat 2b" - with optional letters
+            ayat_header_pat = re.compile(r'^Ayat\s+\(?(\d+[a-z]?)\)?\s*$', re.IGNORECASE)
+            # ALTERNATIVE: Match "Ayat 1." (with period) - old format - can have content after period on same line
+            ayat_with_period_pat = re.compile(r'^Ayat\s+(\d+[a-z]?)\.\s*(.*)$', re.IGNORECASE)  # Match "Ayat 1." or "Ayat 1. content"
+            
             # FIXED: Match "Huruf x" exactly (standalone, not inline with text)
+            # Also support variations like "Huruf j dan Huruf k" or "Huruf j dan k"
             huruf_header_pat = re.compile(r'^Huruf\s+([a-z])\s*$', re.IGNORECASE)
+            # ALTERNATIVE: Match "Huruf x." (with period) - old format - can have content after period on same line
+            huruf_with_period_pat = re.compile(r'^Huruf\s+([a-z])\.\s*(.*)$', re.IGNORECASE)  # Match "Huruf a." or "Huruf a. content"
+            huruf_combined_pat = re.compile(r'^Huruf\s+([a-z])\s+dan\s+(?:Huruf\s+)?([a-z])\s*$', re.IGNORECASE)  # "Huruf j dan k"
             
             # Pattern to detect "Cukup jelas" (means no explanation needed)
             cukup_jelas_pat = re.compile(r'^Cukup\s+jelas\.?\s*$', re.IGNORECASE)
+            # Pattern to detect "Cukup jelas" anywhere in text (including inline)
+            cukup_jelas_inline_pat = re.compile(r'Cukup\s+jelas\.?', re.IGNORECASE)
+            
+            # Helper function to clean content - remove everything after "Cukup jelas"
+            def clean_cukup_jelas(content):
+                """Remove all text after 'Cukup jelas' if found, and truncate at last period before 'TAMBAHAN LEMBARAN NEGARA'"""
+                if not content:
+                    return None
+                
+                # Log untuk debugging
+                original_content = content
+                content_lower = content.lower()
+                
+                # Check if content is ONLY "Cukup jelas" (with optional trailing period/whitespace)
+                if re.match(r'^\s*cukup\s+jelas\.?\s*$', content, re.IGNORECASE):
+                    _logger.info(f"  🚫 Content is only 'Cukup jelas' - discarding")
+                    return None
+                
+                # First, check for "TAMBAHAN LEMBARAN NEGARA" and truncate at last period before it
+                tambahan_match = re.search(r'TAMBAHAN\s+LEMBARAN\s+NEGARA', content, re.IGNORECASE)
+                if tambahan_match:
+                    # Find the last period before "TAMBAHAN LEMBARAN NEGARA"
+                    content_before_tambahan = content[:tambahan_match.start()]
+                    last_period_idx = content_before_tambahan.rfind('.')
+                    if last_period_idx > 0:
+                        content = content[:last_period_idx + 1].strip()
+                        _logger.info(f"  ✂️ Truncated at last period before 'TAMBAHAN LEMBARAN NEGARA'")
+                
+                # Check if "Cukup jelas" appears in content - cut everything after it
+                # Use case-insensitive search
+                match = re.search(r'cukup\s+jelas\.?', content, re.IGNORECASE)
+                if match:
+                    # Found "Cukup jelas" - truncate content before it
+                    before_cukup = content[:match.start()].strip()
+                    
+                    # Remove trailing punctuation/whitespace
+                    before_cukup = before_cukup.rstrip('.,;: \t\n')
+                    
+                    # Clean up any lines that only have period (.) left
+                    lines_cleaned = [l for l in before_cukup.split('\n') if l.strip() and l.strip() != '.']
+                    before_cukup = '\n'.join(lines_cleaned).strip()
+                    
+                    _logger.info(f"  🔪 Found 'Cukup jelas' at position {match.start()} - truncating")
+                    _logger.info(f"     Original: '{content[:100]}...'")
+                    _logger.info(f"     Truncated to: '{before_cukup[:100]}...'")
+                    
+                    # If nothing meaningful before "Cukup jelas", return None
+                    if len(before_cukup) < 10:
+                        _logger.info(f"  🚫 Content before 'Cukup jelas' too short ({len(before_cukup)} chars) - discarding")
+                        return None
+                    
+                    return before_cukup
+                
+                # Check for "PRESIDEN REPUBLIK INDONESIA-X" pattern (footer/header leak)
+                if re.match(r'^PRESIDEN\s+REPUBLIK\s+INDONESIA-\d+', content.strip(), re.IGNORECASE):
+                    _logger.info(f"  🚫 Found 'PRESIDEN REPUBLIK INDONESIA-X' footer - discarding: '{content[:80]}...'")
+                    return None
+                
+                return content
             
             # Pattern to detect continuation markers (e.g., "Huruf d ...", "Pasal 2 ...")
+            continuation_marker_pat = re.compile(r'^(Pasal|Ayat|Huruf)\s+.*\.\.\.\s*$', re.IGNORECASE)
             continuation_marker_pat = re.compile(r'^(Pasal|Ayat|Huruf)\s+.*\.\.\.\s*$', re.IGNORECASE)
             
             _logger.info("=" * 80)
@@ -1150,18 +1610,110 @@ class LegalRegulation(models.Model):
                     continue
                 
                 if in_penjelasan_section:
-                    # Check for Pasal declaration (standalone = explanation for whole Pasal)
-                    pasal_match = pasal_in_penjelasan_pat.match(line)
-                    if pasal_match:
+                    # Check for "I. UMUM" section
+                    if umum_pattern.match(line):
                         # Save previous penjelasan if any
                         if current_penjelasan_key and current_penjelasan_buffer:
-                            content = ' '.join(current_penjelasan_buffer).strip()
-                            if content and not cukup_jelas_pat.match(content):
+                            content = '\n'.join(current_penjelasan_buffer).strip()
+                            content = clean_cukup_jelas(content)
+                            if content:
+                                penjelasan_map[current_penjelasan_key] = content
+                                _logger.info(f"  Saved [{current_penjelasan_key}]: {content[:50]}...")
+                        
+                        # Set context to UMUM
+                        current_penjelasan_key = 'umum'
+                        current_penjelasan_context = {'pasal': None, 'ayat': None}
+                        current_penjelasan_buffer = []
+                        _logger.info(f"\n→ Found 'I. UMUM' - collecting Penjelasan Umum content")
+                        i += 1
+                        continue
+                    
+                    # Check for "II. PASAL DEMI PASAL" - end of UMUM section
+                    if pasal_demi_pasal_pattern.match(line):
+                        # Save UMUM content if we were in it
+                        if current_penjelasan_key == 'umum' and current_penjelasan_buffer:
+                            content = '\n'.join(current_penjelasan_buffer).strip()
+                            content = clean_cukup_jelas(content)
+                            if content and len(content) > 10:
+                                penjelasan_map['umum'] = content
+                                _logger.info(f"  Saved [umum]: {content[:80]}...")
+                        
+                        # Reset context for Pasal Demi Pasal
+                        current_penjelasan_key = None
+                        current_penjelasan_buffer = []
+                        _logger.info(f"\n→ Found 'II. PASAL DEMI PASAL' - ending Penjelasan Umum")
+                        i += 1
+                        continue
+                    
+                    # IMPORTANT: Skip multi-pasal format (e.g., "Pasal 5, 6 dan 7.") - this is NOT a header
+                    # Also skip its content (usually "Sudah cukup terang, tidak memperlukan penjelasan")
+                    if multi_pasal_pat.match(line):
+                        _logger.info(f"  ⏭️ Skipping multi-pasal format: {line.strip()}")
+                        
+                        # First, save current buffer (for previous Pasal) before skipping
+                        if current_penjelasan_key and current_penjelasan_buffer:
+                            content = '\n'.join(current_penjelasan_buffer).strip()
+                            content = clean_cukup_jelas(content)
+                            if content:
+                                penjelasan_map[current_penjelasan_key] = content
+                                _logger.info(f"  Saved [{current_penjelasan_key}] before skip: {content[:50]}...")
+                        
+                        # Reset context and buffer
+                        current_penjelasan_context = {'pasal': None, 'ayat': None}
+                        current_penjelasan_key = None
+                        current_penjelasan_buffer = []
+                        
+                        # Skip content lines until we find next empty line or next Pasal/section
+                        i += 1
+                        while i < len(lines):
+                            skip_line = lines[i].strip()
+                            if not skip_line:
+                                # Empty line - stop skipping
+                                break
+                            # Check if next line is a valid Pasal header (not multi-pasal)
+                            if (pasal_in_penjelasan_pat.match(skip_line) or 
+                                pasal_3digit_pat.match(skip_line) or 
+                                (pasal_with_period_pat.match(skip_line) and not multi_pasal_pat.match(skip_line))):
+                                # Found next Pasal - don't consume this line, let normal flow handle it
+                                i -= 1  # Step back so next iteration processes this line
+                                break
+                            _logger.info(f"    ↳ Skipping content: {skip_line[:60]}...")
+                            i += 1
+                        
+                        i += 1
+                        continue
+                    
+                    # Check for Pasal declaration (standalone = explanation for whole Pasal)
+                    pasal_match = pasal_in_penjelasan_pat.match(line)
+                    pasal_3digit_match = pasal_3digit_pat.match(line) if not pasal_match else None
+                    pasal_period_match = pasal_with_period_pat.match(line) if not pasal_match and not pasal_3digit_match else None
+                    
+                    if pasal_match or pasal_3digit_match or pasal_period_match:
+                        # Save previous penjelasan if any
+                        if current_penjelasan_key and current_penjelasan_buffer:
+                            content = '\n'.join(current_penjelasan_buffer).strip()
+                            content = clean_cukup_jelas(content)
+                            if content:
                                 penjelasan_map[current_penjelasan_key] = content
                                 _logger.info(f"  Saved [{current_penjelasan_key}]: {content[:50]}...")
                         
                         # Set new context
-                        pasal_num = pasal_match.group(1)
+                        if pasal_match:
+                            pasal_num = pasal_match.group(1)
+                        elif pasal_3digit_match:
+                            pasal_num = pasal_3digit_match.group(1)
+                        else:
+                            pasal_num = pasal_period_match.group(1)
+                        
+                        # FIX OCR errors in Pasal number DURING PENJELASAN PARSING
+                        # This ensures "Pasal 458" in PENJELASAN section is recognized as "45B"
+                        if pasal_num == '458':
+                            pasal_num = '45B'
+                            _logger.info(f"  ✓ OCR fix: Pasal 458 → Pasal 45B in PENJELASAN section")
+                        elif pasal_num == '457':
+                            pasal_num = '45A'
+                            _logger.info(f"  ✓ OCR fix: Pasal 457 → Pasal 45A in PENJELASAN section")
+                        
                         current_penjelasan_context = {'pasal': pasal_num, 'ayat': None}
                         
                         # Peek ahead: check if next non-empty line is "Ayat" or "Huruf"
@@ -1171,8 +1723,9 @@ class LegalRegulation(models.Model):
                         while peek_ahead_idx < len(lines):
                             peek_line = lines[peek_ahead_idx].strip()
                             if peek_line:
-                                # Check if it's an Ayat or Huruf header
+                                # Check if it's an Ayat or Huruf header (both old and new format)
                                 if (ayat_header_pat.match(peek_line) or 
+                                    ayat_with_period_pat.match(peek_line) or
                                     huruf_header_pat.match(peek_line)):
                                     has_immediate_ayat_or_huruf = True
                                 break
@@ -1188,30 +1741,74 @@ class LegalRegulation(models.Model):
                             _logger.info(f"\n→ Pasal {pasal_num} context started (has pasal-level explanation)")
                         
                         current_penjelasan_buffer = []
+                        
+                        # If Pasal has content on same line (old format "Pasal 1. content"), add it to buffer
+                        if pasal_period_match and pasal_period_match.group(2).strip():
+                            current_penjelasan_buffer.append(pasal_period_match.group(2).strip())
+                        
                         i += 1
                         continue
                     
-                    # Check for Ayat header (e.g., "Ayat (1)")
+                    # Check for Ayat header (e.g., "Ayat (1)" or "Ayat 1.")
                     ayat_match = ayat_header_pat.match(line)
-                    if ayat_match and current_penjelasan_context['pasal']:
+                    ayat_period_match = ayat_with_period_pat.match(line) if not ayat_match else None
+                    
+                    if (ayat_match or ayat_period_match) and current_penjelasan_context['pasal']:
+                        ayat_num = ayat_match.group(1) if ayat_match else ayat_period_match.group(1)
+                        
+                        # CRITICAL FIX: Detect implicit Pasal boundary
+                        # If we see "Ayat (1)" again, it means we've moved to a new Pasal
+                        # (even if there's no "Pasal X" header)
+                        current_ayat = current_penjelasan_context.get('ayat')
+                        if ayat_num == '1' and current_ayat and current_ayat != '1':
+                            # We found "Ayat (1)" but we already processed other ayats
+                            # This means implicit new Pasal - STOP collecting for previous Pasal
+                            _logger.warning(f"  ⚠️ IMPLICIT PASAL BOUNDARY DETECTED!")
+                            _logger.warning(f"     Found 'Ayat (1)' but current context is Pasal {current_penjelasan_context['pasal']} Ayat ({current_ayat})")
+                            _logger.warning(f"     This indicates start of NEW Pasal without header")
+                            _logger.warning(f"     DISCARDING current buffer to prevent cross-contamination")
+                            
+                            # Clear context and buffer - we don't know which Pasal this belongs to
+                            current_penjelasan_context = {'pasal': None, 'ayat': None}
+                            current_penjelasan_key = None
+                            current_penjelasan_buffer = []
+                            i += 1
+                            continue
+                        
                         # Save previous penjelasan (could be for Pasal or previous Ayat)
                         if current_penjelasan_key and current_penjelasan_buffer:
-                            content = ' '.join(current_penjelasan_buffer).strip()
+                            content = '\n'.join(current_penjelasan_buffer).strip()
                             # Check if content is meaningful (not just "Ayat X Cukup jelas" repeated)
-                            # Filter out buffer that only contains headers like "Ayat 1", "Ayat 2", etc
-                            filtered_content = ' '.join([
+                            # Filter out buffer that only contains headers like "Ayat 1", "Ayat 1.", "Ayat 2", "Ayat 2b", etc
+                            # Also filter out lines with only period (.) left from header removal
+                            filtered_lines = [
                                 line for line in current_penjelasan_buffer 
                                 if line.strip() and 
-                                not re.match(r'^Ayat\s+\d+\s*$', line.strip()) and
-                                not re.match(r'^Huruf\s+[a-z]\s*$', line.strip())
-                            ]).strip()
+                                line.strip() != '.' and  # Remove lonely period
+                                not re.match(r'^Ayat\s+\(?\d+[a-z]?\)?\s*\.?\s*$', line.strip()) and  # Support both "Ayat 1" and "Ayat 1."
+                                not re.match(r'^Huruf\s+[a-z]\s*\.?\s*$', line.strip()) and  # Support both "Huruf a" and "Huruf a."
+                                not re.match(r'^Pasal\s+\d+[A-Z]?\s*\.?\s*$', line.strip()) and  # Filter out "Pasal X" or "Pasal X."
+                                not re.match(r'^Pasal\s+[\d,\s]+dan\s+\d+\s*\.?\s*$', line.strip(), re.IGNORECASE)  # Filter "Pasal 5, 6 dan 7."
+                            ]
+                            # Preserve newlines for list items (a. b. c.) but join paragraphs
+                            filtered_content = '\n'.join(filtered_lines).strip()
                             
+                            filtered_content = clean_cukup_jelas(filtered_content)
                             if filtered_content and len(filtered_content) > 10:
-                                penjelasan_map[current_penjelasan_key] = filtered_content
-                                _logger.info(f"  Saved [{current_penjelasan_key}]: {filtered_content[:50]}...")
+                                # Check for duplicate key (Ayat section)
+                                if current_penjelasan_key in penjelasan_map:
+                                    existing_preview = penjelasan_map[current_penjelasan_key][:80]
+                                    new_preview = filtered_content[:80]
+                                    _logger.warning(f"  ⚠️ DUPLICATE KEY DETECTED: [{current_penjelasan_key}]")
+                                    _logger.warning(f"     FIRST (kept): {existing_preview}...")
+                                    _logger.warning(f"     DUPLICATE (ignored): {new_preview}...")
+                                    _logger.warning(f"     Keeping FIRST occurrence, ignoring duplicate Ayat header")
+                                else:
+                                    penjelasan_map[current_penjelasan_key] = filtered_content
+                                    _logger.info(f"  Saved [{current_penjelasan_key}]: {filtered_content[:50]}...")
                         
                         # Set new Ayat context
-                        ayat_num = ayat_match.group(1)
+                        ayat_num = ayat_match.group(1) if ayat_match else ayat_period_match.group(1)
                         current_penjelasan_context['ayat'] = ayat_num
                         pasal_num = current_penjelasan_context['pasal']
                         
@@ -1221,7 +1818,8 @@ class LegalRegulation(models.Model):
                         while peek_ahead_idx < len(lines):
                             peek_line = lines[peek_ahead_idx].strip()
                             if peek_line:
-                                if huruf_header_pat.match(peek_line):
+                                # Check both old and new Huruf format
+                                if huruf_header_pat.match(peek_line) or huruf_with_period_pat.match(peek_line):
                                     has_immediate_huruf = True
                                 break
                             peek_ahead_idx += 1
@@ -1236,44 +1834,101 @@ class LegalRegulation(models.Model):
                             _logger.info(f"  → Ayat ({ayat_num}) context started (has ayat-level explanation)")
                         
                         current_penjelasan_buffer = []
+                        
+                        # If Ayat has content on same line (old format "Ayat 1. content"), add it to buffer
+                        if ayat_period_match and ayat_period_match.group(2).strip():
+                            current_penjelasan_buffer.append(ayat_period_match.group(2).strip())
+                        
                         i += 1
                         continue
                     
-                    # Check for Huruf header (e.g., "Huruf a")
+                    # Check for Huruf header (e.g., "Huruf a" or "Huruf a.")
                     huruf_match = huruf_header_pat.match(line)
-                    if huruf_match and current_penjelasan_context['pasal'] and current_penjelasan_context['ayat']:
+                    huruf_period_match = huruf_with_period_pat.match(line) if not huruf_match else None
+                    huruf_combined_match = huruf_combined_pat.match(line) if not huruf_match and not huruf_period_match else None
+                    
+                    if (huruf_match or huruf_period_match or huruf_combined_match) and current_penjelasan_context['pasal'] and current_penjelasan_context['ayat']:
                         # Save previous penjelasan
                         if current_penjelasan_key and current_penjelasan_buffer:
-                            content = ' '.join(current_penjelasan_buffer).strip()
-                            # Filter out headers
-                            filtered_content = ' '.join([
+                            content = '\n'.join(current_penjelasan_buffer).strip()
+                            # Filter out headers and preserve newlines for list items
+                            # Also filter out lines with only period (.) left from header removal
+                            filtered_lines = [
                                 line for line in current_penjelasan_buffer 
                                 if line.strip() and 
-                                not re.match(r'^Ayat\s+\d+\s*$', line.strip()) and
-                                not re.match(r'^Huruf\s+[a-z]\s*$', line.strip())
-                            ]).strip()
+                                line.strip() != '.' and  # Remove lonely period
+                                not re.match(r'^Ayat\s+\(?\d+[a-z]?\)?\s*\.?\s*$', line.strip()) and  # Support both "Ayat 1" and "Ayat 1."
+                                not re.match(r'^Huruf\s+[a-z]\s*\.?\s*$', line.strip()) and  # Support both "Huruf a" and "Huruf a."
+                                not re.match(r'^Pasal\s+\d+[A-Z]?\s*\.?\s*$', line.strip()) and  # Filter out "Pasal X" or "Pasal X."
+                                not re.match(r'^Pasal\s+[\d,\s]+dan\s+\d+\s*\.?\s*$', line.strip(), re.IGNORECASE)  # Filter "Pasal 5, 6 dan 7."
+                            ]
+                            filtered_content = '\n'.join(filtered_lines).strip()
                             
+                            filtered_content = clean_cukup_jelas(filtered_content)
                             if filtered_content and len(filtered_content) > 10:
                                 penjelasan_map[current_penjelasan_key] = filtered_content
                                 _logger.info(f"  Saved [{current_penjelasan_key}]: {filtered_content[:50]}...")
+                                
+                                # If previous was a combined huruf, save to BOTH
+                                if 'huruf_combined' in current_penjelasan_context:
+                                    huruf1, huruf2 = current_penjelasan_context['huruf_combined']
+                                    pasal_num = current_penjelasan_context['pasal']
+                                    ayat_num = current_penjelasan_context['ayat']
+                                    key2 = f"pasal_{pasal_num}_ayat_{ayat_num}_huruf_{huruf2}"
+                                    penjelasan_map[key2] = filtered_content
+                                    _logger.info(f"  Also saved to [{key2}]: {filtered_content[:50]}... (combined huruf)")
+                            else:
+                                _logger.info(f"  ⚠️ Skipped [{current_penjelasan_key}]: content too short ({len(filtered_content) if filtered_content else 0} chars) after cleaning")
                         
-                        # Set new Huruf context
-                        huruf = huruf_match.group(1)
                         pasal_num = current_penjelasan_context['pasal']
                         ayat_num = current_penjelasan_context['ayat']
-                        current_penjelasan_key = f"pasal_{pasal_num}_ayat_{ayat_num}_huruf_{huruf}"
+                        
+                        if huruf_combined_match:
+                            # "Huruf j dan k" - save for both j and k
+                            huruf1 = huruf_combined_match.group(1)
+                            huruf2 = huruf_combined_match.group(2)
+                            _logger.info(f"    → Combined Huruf {huruf1} dan {huruf2} context started (Pasal {pasal_num} Ayat {ayat_num})")
+                            # We'll collect the content and save it for BOTH huruf
+                            current_penjelasan_key = f"pasal_{pasal_num}_ayat_{ayat_num}_huruf_{huruf1}"  # Start with first
+                            current_penjelasan_context['huruf_combined'] = (huruf1, huruf2)  # Track both
+                        else:
+                            # Single huruf (either "Huruf a" or "Huruf a.")
+                            huruf = huruf_match.group(1) if huruf_match else huruf_period_match.group(1)
+                            current_penjelasan_key = f"pasal_{pasal_num}_ayat_{ayat_num}_huruf_{huruf}"
+                            current_penjelasan_context.pop('huruf_combined', None)  # Clear combined flag
+                            _logger.info(f"    → Huruf {huruf} context started (Pasal {pasal_num} Ayat {ayat_num})")
+                        
                         current_penjelasan_buffer = []
-                        _logger.info(f"    → Huruf {huruf} context started")
+                        
+                        # If Huruf has content on same line (old format "Huruf a. content"), add it to buffer
+                        if huruf_period_match and huruf_period_match.group(2).strip():
+                            current_penjelasan_buffer.append(huruf_period_match.group(2).strip())
+                        
                         i += 1
                         continue
                     
                     # Accumulate text for current penjelasan (skip empty lines at start)
                     if line:
-                        # Skip "Cukup jelas", page markers, continuation markers, and headers
-                        if (not cukup_jelas_pat.match(line) and 
-                            not continuation_marker_pat.match(line) and
+                        # Check if this is "Cukup jelas" - if so, skip adding to buffer and mark it
+                        if cukup_jelas_pat.match(line):
+                            # Clear buffer - we don't want to save "Cukup jelas" entries
+                            current_penjelasan_buffer = []
+                            # Set key to None to prevent saving
+                            current_penjelasan_key = None
+                            _logger.info(f"  ⚠ Found 'Cukup jelas' - clearing buffer and key")
+                            i += 1
+                            continue
+                        
+                        # If key is None (we're after "Cukup jelas"), don't accumulate anything
+                        # until we hit a new Pasal/Ayat/Huruf header
+                        if current_penjelasan_key is None:
+                            i += 1
+                            continue
+                        
+                        # Skip continuation markers, page markers, and headers
+                        if (not continuation_marker_pat.match(line) and
                             not re.match(r'^\s*-\s*\d+\s*-\s*$', line) and  # Page markers
-                            not re.match(r'^Ayat\s+\d+\s*$', line.strip()) and  # Ayat headers
+                            not re.match(r'^Ayat\s+\(?\d+[a-z]?\)?\s*$', line.strip()) and  # Ayat headers: "Ayat (1)", "Ayat 2b", etc
                             not re.match(r'^Huruf\s+[a-z]\s*$', line.strip())):  # Huruf headers
                             if current_penjelasan_buffer or line.strip():  # Skip leading empty lines
                                 current_penjelasan_buffer.append(line)
@@ -1282,11 +1937,22 @@ class LegalRegulation(models.Model):
             
             # Save last penjelasan (only if content is not empty and not just "Cukup jelas")
             if current_penjelasan_key and current_penjelasan_buffer:
-                content = ' '.join(current_penjelasan_buffer).strip()
+                content = '\n'.join(current_penjelasan_buffer).strip()
+                content = clean_cukup_jelas(content)
                 # Double check: content should have meaningful text
                 if content and len(content) > 10:  # More than just whitespace or short placeholder
                     penjelasan_map[current_penjelasan_key] = content
                     _logger.info(f"  Saved [{current_penjelasan_key}]: {content[:50]}...")
+                    
+                    # If this was a combined huruf (j dan k), save to BOTH huruf
+                    if 'huruf_combined' in current_penjelasan_context:
+                        huruf1, huruf2 = current_penjelasan_context['huruf_combined']
+                        pasal_num = current_penjelasan_context['pasal']
+                        ayat_num = current_penjelasan_context['ayat']
+                        key2 = f"pasal_{pasal_num}_ayat_{ayat_num}_huruf_{huruf2}"
+                        penjelasan_map[key2] = content
+                        _logger.info(f"  Also saved to [{key2}]: {content[:50]}... (combined huruf)")
+
             
             _logger.info(f"\n✓ Total penjelasan collected: {len(penjelasan_map)}")
             for key in sorted(penjelasan_map.keys()):
@@ -1296,6 +1962,7 @@ class LegalRegulation(models.Model):
             in_penjelasan_section = False
             current_pasal = None
             current_ayat = None
+            umum_inserted = False  # Track if we've inserted Penjelasan Umum
             
             # pending penjelasan markers to flush at boundaries
             pending_pasal_lines = None
@@ -1303,15 +1970,138 @@ class LegalRegulation(models.Model):
             pending_huruf_lines = None
             
             # Patterns for main content
-            pasal_main_pat = re.compile(r'^Pasal\s+(\d+)', re.IGNORECASE)
+            pasal_main_pat = re.compile(r'^Pasal\s+((?:\d+[A-Z]?)|(?:[IVX]+))', re.IGNORECASE)  # Match "Pasal 1", "Pasal 45A", or "Pasal II"
             ayat_main_pat = re.compile(r'^\((\d+)\)')
             huruf_main_pat = re.compile(r'^([a-z])\.')
             bab_header_pat = re.compile(r'^(BAB|BAGIAN)\s+', re.IGNORECASE)
+            # Pattern to detect "Menimbang" (where we insert Penjelasan Umum before it)
+            # Support both with and without colon
+            menimbang_pat = re.compile(r'^\s*(Menimbang)\s*:?\s*(.*)$', re.IGNORECASE)
+            # Pattern to detect "DENGAN RAHMAT ... PRESIDEN REPUBLIK INDONESIA" - insert Penjelasan Umum AFTER it
+            dengan_rahmat_presiden_pat = re.compile(r'^\s*DENGAN\s+RAHMAT.*PRESIDEN\s+REPUBLIK\s+INDONESIA', re.IGNORECASE)
             
             _logger.info("\n" + "=" * 80)
             _logger.info("INSERTING PENJELASAN INTO MAIN CONTENT (AFTER CONTENT)")
             _logger.info("=" * 80)
             
+            def render_penjelasan_text(txt: str) -> str:
+                # Render enumerations ((1), 1., a.) into ordered lists
+                # Support multiple lists separated by intro text like "seperti berikut:"
+                if not txt:
+                    return ''
+                # Normalize newlines but PRESERVE empty lines to detect list boundaries
+                txt_n = txt.replace('\r\n', '\n').replace('\r', '\n')
+                lines = txt_n.split('\n')  # Don't strip empty lines yet
+                
+                # Pattern to detect list introduction (e.g., "seperti berikut:", "yaitu:", "sebagai berikut:")
+                list_intro_pat = re.compile(r'.*(seperti berikut|sebagai berikut|yaitu|antara lain)\s*:\s*$', re.IGNORECASE)
+                
+                html_parts = []
+                current_list_items = []
+                current_list_type = None
+                current_paragraph_lines = []
+                prev_was_empty = False
+                
+                def flush_paragraph():
+                    """Flush accumulated paragraph lines"""
+                    nonlocal current_paragraph_lines
+                    if current_paragraph_lines:
+                        para_text = ' '.join(current_paragraph_lines)
+                        html_parts.append(f'<p style="margin-bottom: 10px;">{para_text}</p>')
+                        current_paragraph_lines = []
+                
+                def flush_list():
+                    """Flush accumulated list items"""
+                    nonlocal current_list_items, current_list_type
+                    if current_list_items:
+                        ol_type = '1' if current_list_type == 'numeric' else 'a'
+                        list_html = f'<ol type="{ol_type}" style="margin-left: 20px; margin-top: 5px;">'
+                        for item in current_list_items:
+                            list_html += f'<li style="margin-bottom: 8px; line-height: 1.6;">{item}</li>'
+                        list_html += '</ol>'
+                        html_parts.append(list_html)
+                        current_list_items = []
+                        current_list_type = None
+                
+                # Process lines
+                for ln in lines:
+                    ln_stripped = ln.strip()
+                    
+                    # Check for empty line
+                    if not ln_stripped:
+                        # Empty line - end current list (if any)
+                        if current_list_items:
+                            flush_list()
+                        prev_was_empty = True
+                        continue
+                    
+                    # Try patterns: (1), 1., a., (a)
+                    m_paren = re.match(r'^\((\d+|[a-z])\)\s+(.*)$', ln_stripped)  # (1) or (a)
+                    m_dot = re.match(r'^(\d+|[a-z])\.\s+(.*)$', ln_stripped)     # 1. or a.
+                    
+                    # Check if this is a list introduction line
+                    if list_intro_pat.match(ln_stripped):
+                        # Flush current list (if any)
+                        flush_list()
+                        # Add this as paragraph (intro text)
+                        flush_paragraph()
+                        current_paragraph_lines.append(ln_stripped)
+                        flush_paragraph()
+                        prev_was_empty = False
+                        continue
+                    
+                    if m_paren or m_dot:
+                        # This is a list item - flush any pending paragraph first
+                        flush_paragraph()
+                        
+                        # Extract item content and number
+                        if m_paren:
+                            num_str = m_paren.group(1)
+                            content = m_paren.group(2).strip()
+                        else:
+                            num_str = m_dot.group(1)
+                            content = m_dot.group(2).strip()
+                        
+                        # Detect if numeric or alpha
+                        is_numeric = num_str.isdigit()
+                        
+                        # If number is "1" or "a" and we already have items, this might be a new list
+                        if (num_str == '1' or num_str == 'a') and current_list_items:
+                            # Check if type changed - if so, start new list
+                            type_changed = (is_numeric and current_list_type != 'numeric') or (not is_numeric and current_list_type != 'alpha')
+                            if type_changed:
+                                flush_list()
+                        
+                        # Set or maintain list type
+                        if current_list_type is None:
+                            current_list_type = 'numeric' if is_numeric else 'alpha'
+                        
+                        # Add to current list
+                        current_list_items.append(content)
+                        prev_was_empty = False
+                    else:
+                        # Not a list item
+                        # If previous line was empty OR no active list, this is a new paragraph
+                        # Otherwise, it's continuation of last list item (same paragraph)
+                        if prev_was_empty or not current_list_items:
+                            # Start/continue paragraph
+                            flush_list()  # Ensure any list is closed first
+                            current_paragraph_lines.append(ln_stripped)
+                        else:
+                            # Continuation of last list item (no empty line between)
+                            current_list_items[-1] += ' ' + ln_stripped
+                        prev_was_empty = False
+                
+                # Flush remaining content
+                flush_paragraph()
+                flush_list()
+                
+                if not html_parts:
+                    # fallback: convert newlines to <br>
+                    html_parts.append('<p>' + '<br>'.join([l.strip() for l in lines if l.strip()]) + '</p>')
+                
+                return ''.join(html_parts)
+
             def flush_huruf():
                 nonlocal pending_huruf_lines
                 if pending_huruf_lines:
@@ -1345,6 +2135,50 @@ class LegalRegulation(models.Model):
                     _logger.info("\n✓ Reached Penjelasan section, stopping insertion")
                     break
                 
+                # PRIORITY 1: Insert Penjelasan Umum AFTER "DENGAN RAHMAT ... PRESIDEN REPUBLIK INDONESIA"
+                # This should appear BEFORE "Menimbang"
+                dengan_rahmat_match = dengan_rahmat_presiden_pat.match(stripped)
+                if dengan_rahmat_match and not umum_inserted:
+                    # First, add the "DENGAN RAHMAT ... PRESIDEN" line
+                    result_lines.append(line)
+                    # Then insert Penjelasan Umum right after
+                    if 'umum' in penjelasan_map:
+                        _logger.info(f"  -> TRIGGERING insertion after DENGAN RAHMAT...PRESIDEN")
+                        _logger.info(f"  -> Penjelasan Umum content length: {len(penjelasan_map['umum'])} chars")
+                        result_lines.extend([
+                            '',
+                            '📘 [Penjelasan Umum]:',
+                            render_penjelasan_text(penjelasan_map['umum']),
+                            ''
+                        ])
+                        umum_inserted = True
+                        _logger.info(f"  -> Inserted Penjelasan Umum after DENGAN RAHMAT...PRESIDEN ({len(penjelasan_map['umum'])} chars)")
+                    else:
+                        _logger.warning(f"  -> Found DENGAN RAHMAT...PRESIDEN but 'umum' NOT in penjelasan_map!")
+                    continue
+                
+                # PRIORITY 2: Detect "Menimbang" (fallback if PRESIDEN not found)
+                menimbang_match = menimbang_pat.match(stripped)
+                
+                if menimbang_match and not umum_inserted:
+                    # Insert Penjelasan Umum BEFORE "Menimbang"
+                    if 'umum' in penjelasan_map:
+                        _logger.info(f"  -> TRIGGERING insertion before Menimbang")
+                        _logger.info(f"  -> Penjelasan Umum content length: {len(penjelasan_map['umum'])} chars")
+                        result_lines.extend([
+                            '',
+                            '📘 [Penjelasan Umum]:',
+                            render_penjelasan_text(penjelasan_map['umum']),
+                            ''
+                        ])
+                        umum_inserted = True
+                        _logger.info(f"  -> Inserted Penjelasan Umum before Menimbang ({len(penjelasan_map['umum'])} chars)")
+                    else:
+                        _logger.warning(f"  -> Found Menimbang but 'umum' NOT in penjelasan_map!")
+                    # Now add the Menimbang line
+                    result_lines.append(line)
+                    continue
+                
                 # Check for BAB/BAGIAN headers - these should trigger flush of pending pasal
                 if bab_header_pat.match(stripped):
                     flush_pasal()
@@ -1361,6 +2195,7 @@ class LegalRegulation(models.Model):
                     current_pasal = pasal_match.group(1)
                     current_ayat = None
                     result_lines.append(line)
+                    _logger.info(f"  → Detected Pasal {current_pasal} in main content")
                     
                     # Prepare Pasal-level penjelasan to be inserted AFTER pasal content
                     key = f'pasal_{current_pasal}'
@@ -1368,10 +2203,10 @@ class LegalRegulation(models.Model):
                         pending_pasal_lines = [
                             '',
                             f'💡 [Penjelasan Pasal {current_pasal}]:',
-                            f'{penjelasan_map[key]}',
+                            f'{render_penjelasan_text(penjelasan_map[key])}',
                             ''
                         ]
-                        _logger.info(f"  ↪ Queued penjelasan for Pasal {current_pasal}")
+                        _logger.info(f"  -> Queued penjelasan for Pasal {current_pasal}")
                     else:
                         pending_pasal_lines = None
                     continue
@@ -1379,6 +2214,14 @@ class LegalRegulation(models.Model):
                 # Track current Ayat
                 ayat_match = ayat_main_pat.match(stripped)
                 if ayat_match and current_pasal:
+                    # IMPORTANT: Before entering first Ayat, flush pending Pasal-level penjelasan
+                    # This ensures Penjelasan Pasal appears AFTER Pasal header but BEFORE Ayat (1)
+                    if current_ayat is None and pending_pasal_lines:
+                        # This is the FIRST ayat in this Pasal - flush Pasal penjelasan now
+                        result_lines.extend(pending_pasal_lines)
+                        pending_pasal_lines = None
+                        _logger.info(f"  -> Inserted Penjelasan Pasal {current_pasal} before first Ayat")
+                    
                     # entering a new ayat: flush previous pending huruf/ayat
                     if current_ayat is not None:
                         flush_ayat()
@@ -1392,10 +2235,10 @@ class LegalRegulation(models.Model):
                         pending_ayat_lines = [
                             '',
                             f'💡 [Penjelasan Ayat ({current_ayat})]:',
-                            f'{penjelasan_map[key]}',
+                            f'{render_penjelasan_text(penjelasan_map[key])}',
                             ''
                         ]
-                        _logger.info(f"  ↪ Queued penjelasan for Pasal {current_pasal} Ayat ({current_ayat})")
+                        _logger.info(f"  -> Queued penjelasan for Pasal {current_pasal} Ayat ({current_ayat})")
                     else:
                         pending_ayat_lines = None
                     continue
@@ -1409,17 +2252,15 @@ class LegalRegulation(models.Model):
                         huruf = huruf_match.group(1)
                         result_lines.append(line)
                         
-                        # Prepare Huruf-level penjelasan to be inserted AFTER huruf content
+                        # Insert Huruf-level penjelasan IMMEDIATELY after huruf line
                         key = f'pasal_{current_pasal}_ayat_{current_ayat}_huruf_{huruf}'
                         if key in penjelasan_map:
-                            pending_huruf_lines = [
+                            result_lines.extend([
                                 f'   💡 [Penjelasan Huruf {huruf}]:',
-                                f'   {penjelasan_map[key]}',
+                                f'   {render_penjelasan_text(penjelasan_map[key])}',
                                 ''
-                            ]
-                            _logger.info(f"  ↪ Queued penjelasan for Pasal {current_pasal} Ayat ({current_ayat}) Huruf {huruf}")
-                        else:
-                            pending_huruf_lines = None
+                            ])
+                            _logger.info(f"  -> Inserted penjelasan immediately for Pasal {current_pasal} Ayat ({current_ayat}) Huruf {huruf}")
                         continue
                 
                 # Regular line - just add it
@@ -1436,7 +2277,7 @@ class LegalRegulation(models.Model):
         except Exception as e:
             _logger.warning(f"Failed to insert penjelasan: {e}")
             return text
-
+        
     def _extract_text_from_txt(self, txt_data):
         """Extract and format text from TXT upload (base64-encoded)."""
         try:
@@ -1456,6 +2297,252 @@ class LegalRegulation(models.Model):
 
             # Normalize newlines
             text = text.replace('\r\n', '\n').replace('\r', '\n')
+
+            # EARLY SNIPPET (raw before fixes) for Perubahan 7 block if present
+            early_idx = text.lower().find('ketentuan ayat (2), ayat (3), ayat (5), ayat (6), ayat (7), dan ayat (8) pasal 43')
+            if early_idx != -1:
+                early_snippet = text[early_idx:early_idx+500]
+                _logger.info('  [Perubahan7 RAW before OCR fixes] ' + early_snippet.replace('\n', ' | '))
+
+            # Clean common OCR errors from PDF-to-TXT conversion
+            text = re.sub(r'2g([A-Z])', r'28\1', text)  # Fix "2gD" -> "28D"
+            text = re.sub(r'20l6', r'2016', text)  # Fix "20l6" -> "2016"
+            text = re.sub(r'20l([0-9])', r'201\1', text)  # Fix "20l1" -> "2011"
+            text = text.replace('Undang_Undang', 'Undang-Undang')
+            text = text.replace('Undang_ Undang', 'Undang-Undang')
+            
+            # Fix Pasal number OCR errors FIRST (before any other processing)
+            # This is CRITICAL: must be done early so other patterns can recognize "Pasal 45A", "Pasal 45B" etc.
+            _logger.info("Fixing Pasal number OCR errors (458->45B, 45El->45B, etc.)...")
+            text = re.sub(r'\bPasal\s+458\b', 'Pasal 45B', text, flags=re.IGNORECASE)  # 458 -> 45B
+            text = re.sub(r'\bpasal\s+458\b', 'Pasal 45B', text, flags=re.IGNORECASE)  # pasal 458 -> Pasal 45B
+            text = re.sub(r'\bPasal\s+45El\b', 'Pasal 45B', text, flags=re.IGNORECASE)  # 45El -> 45B
+            text = re.sub(r'\bpasal\s+45El\b', 'Pasal 45B', text, flags=re.IGNORECASE)  # pasal 45El -> Pasal 45B
+            text = re.sub(r'\bPasal\s+45B\b', 'Pasal 45B', text, flags=re.IGNORECASE)  # Normalize case
+            text = re.sub(r'\bPasal\s+457\b', 'Pasal 45A', text, flags=re.IGNORECASE)  # 457 -> 45A (if exists)
+            text = re.sub(r'\bpasal\s+457\b', 'Pasal 45A', text, flags=re.IGNORECASE)  # pasal 457 -> Pasal 45A
+            text = re.sub(r'\bPasal\s+45A\b', 'Pasal 45A', text, flags=re.IGNORECASE)  # Normalize case
+            
+            # Fix common word OCR errors
+            text = re.sub(r'\bayal\b', 'ayat', text, flags=re.IGNORECASE)  # Fix "ayal" -> "ayat"
+            text = re.sub(r'\bs6lagaimana\b', 'sebagaimana', text, flags=re.IGNORECASE)  
+            text = re.sub(r'\bElektronik dal\b', 'Elektronik dan', text)  
+            text = re.sub(r'\bdal rekam\b', 'dan rekam', text, flags=re.IGNORECASE)  
+            # Fix "dimaksud" OCR variants where 'maksud' middle chars misread (L/I/1)
+            text = re.sub(r'\bdima[LI1]sud\b', 'dimaksud', text, flags=re.IGNORECASE)  # dimaLsud/dima1sud/dimaIsud -> dimaksud
+            
+            # Fix "cyber bullying" OCR errors - MUST BE BEFORE parenthesis fixes
+            # "bullyingl" is actually "bullying)" where "l" is misread closing parenthesis
+            text = re.sub(r'\(cgber\s+bullyingl', '(cyber bullying)', text, flags=re.IGNORECASE)  # (cgber bullyingl -> (cyber bullying)
+            text = re.sub(r'cgber', 'cyber', text, flags=re.IGNORECASE)  # cgber -> cyber (fallback)
+            text = re.sub(r'bullyingl', 'bullying)', text, flags=re.IGNORECASE)  # bullyingl -> bullying) (fallback)
+            
+            # Fix "huruf" followed by letter without space (e.g., "hurufj" -> "huruf j")
+            text = re.sub(r'\bhuruf([a-z])\b', r'huruf \1', text, flags=re.IGNORECASE)  # hurufj -> huruf j
+            _logger.info("Fixed merged 'huruf+letter' patterns (hurufj -> huruf j)")
+            
+            # Fix OCR error in privacy rights: "piuacg nqfus" -> "privacy rights"
+            text = re.sub(r'\bpiuacg\s+nqfus\b', 'privacy rights', text, flags=re.IGNORECASE)
+            
+            # Fix parenthesis errors: "l" at end of numbers in parenthesis -> ")"
+            text = re.sub(r'\((\d+)l\b', r'(\1)', text)  # (1l -> (1)
+            text = re.sub(r'\((\d+[a-z])l\b', r'(\1)', text)  # (2al -> (2a)
+            text = re.sub(r'\((\d+)1\b', r'(\1)', text)  # (11 -> (1)
+            text = re.sub(r'\((\d+[a-z])1\b', r'(\1)', text)  # (2a1 -> (2a)
+            
+            # Fix double-l in parenthesis: (ll -> (1)
+            text = re.sub(r'\(ll\b', r'(1', text)  # (ll -> (1
+            text = re.sub(r'ayat\s+\(ll\)', 'ayat (1)', text, flags=re.IGNORECASE)  # ayat (ll) -> ayat (1)
+            
+            # Fix single lowercase L or uppercase I in parenthesis: (l) -> (1), (I) -> (1)
+            text = re.sub(r'\([lI]\)', '(1)', text)  # (l) -> (1), (I) -> (1)
+            text = re.sub(r'ayat\s+\([lI]\)', 'Ayat (1)', text, flags=re.IGNORECASE)  # Ayat (l) -> Ayat (1), Ayat (I) -> Ayat (1)
+            text = re.sub(r'Pasal\s+(\d+)\s+ayat\s+\([lI]\)', r'Pasal \1 ayat (1)', text, flags=re.IGNORECASE)  # Pasal X ayat (l) -> Pasal X ayat (1)
+            
+            # Fix lowercase 'r' misread as '1' in parenthesis: (r) -> (1)
+            text = re.sub(r'\(r\)', '(1)', text)  # (r) -> (1)
+            text = re.sub(r'ayat\s+\(r\)', 'ayat (1)', text, flags=re.IGNORECASE)  # ayat (r) -> ayat (1)
+            text = re.sub(r'Pasal\s+(\d+)\s+ayat\s+\(r\)', r'Pasal \1 ayat (1)', text, flags=re.IGNORECASE)  # Pasal X ayat (r) -> Pasal X ayat (1)
+            
+            # Fix incomplete parenthesis: ayat (1 -> ayat (1)
+            text = re.sub(r'ayat\s+\((\d+[a-z]?)\s+', r'ayat (\1) ', text, flags=re.IGNORECASE)  # ayat (1 something -> ayat (1) something
+            text = re.sub(r'ayat\s+\((\d+[a-z]?)\n', r'ayat (\1)\n', text, flags=re.IGNORECASE)  # ayat (1 newline -> ayat (1) newline
+
+            # Fix broken enumeration line breaks: e.g.
+            # "Ketentuan ayat (2), ayat (3), ayat (5), ayat (6), ayat (7), dan ayat\n(8)" -> single line
+            _logger.info("Applying ayat enumeration line-break fixes...")
+            # Join newline between 'ayat' (or 'dan ayat') and '(NUMBER)'
+            text = re.sub(r'(ayat)\s*\n\(\s*(\d+[a-z]?)\)', r'\1 (\2)', text, flags=re.IGNORECASE)
+            text = re.sub(r'(dan\s+ayat)\s*\n\(\s*(\d+[a-z]?)\)', r'\1 (\2)', text, flags=re.IGNORECASE)
+            # Also handle optional preceding comma before newline
+            text = re.sub(r'(ayat\s*\([^\)]+\),\s+dan\s+ayat)\s*\n\(\s*(\d+[a-z]?)\)', r'\1 (\2)', text, flags=re.IGNORECASE)
+            # Handle pattern: 'ayat (7), dan ayat\n(8) Pasal' -> 'ayat (7), dan ayat (8) Pasal'
+            text = re.sub(r'(ayat\s*\(\d+[a-z]?\)\s*,?\s*dan\s+ayat)\s*\n\(\s*(\d+[a-z]?)\s*(Pasal)\b', r'\1 (\2) \3', text, flags=re.IGNORECASE)
+            # Handle pattern: 'di antara ayat (7) dan ayat\n(8) Pasal' -> 'di antara ayat (7) dan ayat (8) Pasal'
+            text = re.sub(r'(di\s+antara\s+ayat\s*\(\d+[a-z]?\)\s+dan\s+ayat)\s*\n\(\s*(\d+[a-z]?)\s*(Pasal)\b', r'\1 (\2) \3', text, flags=re.IGNORECASE)
+            # Generic safeguard: line ends with 'dan ayat' and next line starts '(NUMBER) Pasal'
+            text = re.sub(r'(dan\s+ayat)\s*\n\(\s*(\d+[a-z]?)\s*(Pasal)\b', r'\1 (\2) \3', text, flags=re.IGNORECASE)
+            # Capitalize 'sehingga pasal 43' -> 'sehingga Pasal 43'
+            text = re.sub(r'(?i)sehingga\s+pasal\s+(\d+)', r'sehingga Pasal \1', text)
+
+            # Fix broken huruf enumeration: "c.\n" followed by text on next line -> "c. text" on same line
+            # This handles cases where letter enumeration is separated from its content
+            _logger.info("Fixing broken huruf (a., b., c., etc.) enumeration line breaks...")
+            # Match pattern: line with just "c." or "c. " followed by newline and content
+            before_fix = text
+            text = re.sub(r'^([a-z])\.\s*$\n\s*(.+)', r'\1. \2', text, flags=re.MULTILINE)
+            if text != before_fix:
+                _logger.info("  ✓ Fixed broken huruf enumeration (standalone letter on one line, content on next)")
+            
+            # FIX: Separate "Pasal 1 Dalam Undang-Undang..." into two lines
+            # Also handle Roman numerals like "Pasal I Dalam Undang-Undang..."
+            # "Pasal 1 Dalam Undang-Undang ini yang dimaksud dengan:" -> "Pasal 1\nDalam Undang-Undang ini yang dimaksud dengan:"
+            _logger.info("Separating 'Dalam Undang-Undang' subtitle from Pasal header...")
+            
+            # Check if pattern exists before replacement (support both numeric and Roman)
+            pasal_dalam_pattern = re.compile(r'\b(Pasal\s+(?:\d+[A-Z]?|[IVX]+))\s+(Dalam\s+Undang-Undang\s+ini\s+yang\s+dimaksud\s+dengan:)', re.IGNORECASE)
+            matches = pasal_dalam_pattern.findall(text)
+            if matches:
+                _logger.info(f"  Found {len(matches)} occurrences of 'Pasal X Dalam Undang-Undang...'")
+                for match in matches[:3]:  # Show first 3
+                    _logger.info(f"    - '{match[0]} {match[1][:50]}...'")
+            else:
+                _logger.info("  No 'Pasal X Dalam Undang-Undang...' pattern found")
+            
+            # Separate for numeric Pasal (Pasal 1, Pasal 2, etc.)
+            text = re.sub(
+                r'\b(Pasal\s+\d+[A-Z]?)\s+(Dalam\s+Undang-Undang\s+ini\s+yang\s+dimaksud\s+dengan:)',
+                r'\1\n\2',
+                text,
+                flags=re.IGNORECASE
+            )
+            
+            # Separate for Roman numeral Pasal (Pasal I, Pasal II, etc.)
+            text = re.sub(
+                r'\b(Pasal\s+[IVX]+)\s+(Dalam\s+Undang-Undang\s+ini\s+yang\s+dimaksud\s+dengan:)',
+                r'\1\n\2',
+                text,
+                flags=re.IGNORECASE
+            )
+            
+            # Log snippet to verify separation worked
+            if matches:
+                # Find "Pasal 1" or "Pasal I" in text after separation
+                pasal1_idx = text.lower().find('pasal 1')
+                if pasal1_idx == -1:
+                    pasal1_idx = text.lower().find('pasal i')
+                if pasal1_idx != -1:
+                    snippet = text[pasal1_idx:pasal1_idx+150]
+                    _logger.info(f"  After separation, Pasal area: {snippet.replace(chr(10), ' | ')}")
+
+            
+            # CRITICAL: Separate "Pasal 45A", "Pasal 45B", etc. onto their own lines
+            # But ONLY when they appear as actual section headers (after punctuation + followed by content)
+            # NOT when mentioned in reference lists like "pasal 25A, pasal 28D"
+            _logger.info("Separating Pasal headers with letter suffixes (45A, 45B, etc.) from following content...")
+            
+            # BROAD APPROACH: Separate "Pasal 45B" when it appears after any sentence ending
+            # Pattern matches: ). or .) or closing paren followed by period
+            
+            # Match various patterns of sentence ending before Pasal 45A/45B
+            # Examples: "rupiah). Pasal 45B", "000,00 (satu miliar rupiah). Pasal 45B", "Pasal 29 dipidana. Pasal 45B"
+            
+            text = re.sub(
+                r'([.)])(\s*)Pasal\s+45B\s+',
+                r'\1\nPasal 45B\n',
+                text,
+                flags=re.IGNORECASE
+            )
+            
+            text = re.sub(
+                r'([.)])(\s*)Pasal\s+45A\s+',
+                r'\1\nPasal 45A\n',
+                text,
+                flags=re.IGNORECASE
+            )
+            
+            # Also handle if there's a newline already between ). and Pasal
+            text = re.sub(
+                r'([.)])\s*\n\s*Pasal\s+45B\s+',
+                r'\1\nPasal 45B\n',
+                text,
+                flags=re.IGNORECASE
+            )
+            
+            # Merge broken lines from PDF conversion
+            _logger.info("Starting sentence merge process...")
+            text = self._merge_broken_lines(text)
+
+            # SNIPPET after merge
+            mid_idx = text.lower().find('ketentuan ayat (2), ayat (3), ayat (5), ayat (6), ayat (7), dan ayat (8) pasal 43')
+            if mid_idx != -1:
+                mid_snippet = text[mid_idx:mid_idx+550]
+                _logger.info('  [Perubahan7 AFTER merge] ' + mid_snippet.replace('\n', ' | '))
+
+            # Guarantee continuity for Perubahan 7 full sentence (avoid truncation after "; serta")
+            # Target expected tail phrase
+            expected_tail_pat = re.compile(r'serta\s+penjelasan\s+ayat\s*\(1\)\s+Pasal\s+43\s+diubah\s+sehingga\s+Pasal\s+43\s+berbunyi\s+sebagai\s+berikut:', re.IGNORECASE)
+            # If we have the beginning but not the tail, try to locate tail elsewhere and append
+            start_pat = re.compile(r'Ketentuan\s+ayat\s*\(2\).*?yakni\s+ayat\s*\(7a\);\s*serta\b', re.IGNORECASE | re.DOTALL)
+            has_start = bool(start_pat.search(text))
+            has_tail = bool(expected_tail_pat.search(text))
+            if has_start and has_tail:
+                # Ensure they are contiguous (no accidental removal). If a newline splits, remove it.
+                text = re.sub(r'(yakni\s+ayat\s*\(7a\);)\s*\n\s*(serta\s+penjelasan)', r'\1 \2', text, flags=re.IGNORECASE)
+            elif has_start and not has_tail:
+                _logger.warning('  Perubahan7: tail phrase missing after "; serta" — attempting recovery.')
+                # Attempt heuristic recovery: look for a truncated 'serta' ending
+                # If next 200 chars after the start pattern end with 'serta', log for diagnostics
+                m = start_pat.search(text)
+                if m:
+                    after_pos = m.end()
+                    diagnostic_tail = text[after_pos:after_pos+250]
+                    _logger.warning('  [Perubahan7 DIAGNOSTIC after start] ' + diagnostic_tail.replace('\n', ' | '))
+            else:
+                _logger.info('  Perubahan7: start pattern not detected or already intact.')
+
+            # SECOND PASS: enumeration newline fixes after line-merging (merge may reintroduce breaks)
+            _logger.info("Re-applying ayat enumeration fixes post-merge (spasi-aware)...")
+            pre_count_generic = len(re.findall(r'ayat\s*\n\s*\(\s*\d', text, flags=re.IGNORECASE))
+            pre_count_dan = len(re.findall(r'dan\s+ayat\s*\n\s*\(\s*\d', text, flags=re.IGNORECASE))
+            if pre_count_generic or pre_count_dan:
+                _logger.info(f"  Found {pre_count_generic} generic and {pre_count_dan} 'dan ayat' broken enumerations before fix")
+            # Generic ayat followed by newline + (number)
+            text = re.sub(r'(ayat)\s*\n\s*\(\s*(\d+[a-z]?)\)', r'\1 (\2)', text, flags=re.IGNORECASE)
+            # 'dan ayat' case
+            text = re.sub(r'(dan\s+ayat)\s*\n\s*\(\s*(\d+[a-z]?)\)', r'\1 (\2)', text, flags=re.IGNORECASE)
+            # Enumeration with preceding list and comma
+            text = re.sub(r'(ayat\s*\([^\)]+\),\s+dan\s+ayat)\s*\n\s*\(\s*(\d+[a-z]?)\)', r'\1 (\2)', text, flags=re.IGNORECASE)
+            # Pattern ending before 'Pasal'
+            text = re.sub(r'(ayat\s*\(\d+[a-z]?\)\s*,?\s*dan\s+ayat)\s*\n\s*\(\s*(\d+[a-z]?)\s*(Pasal)\b', r'\1 (\2) \3', text, flags=re.IGNORECASE)
+            # 'di antara ayat (7) dan ayat\n(8) Pasal'
+            text = re.sub(r'(di\s+antara\s+ayat\s*\(\d+[a-z]?\)\s+dan\s+ayat)\s*\n\s*\(\s*(\d+[a-z]?)\s*(Pasal)\b', r'\1 (\2) \3', text, flags=re.IGNORECASE)
+            # Simple trailing 'dan ayat' before Pasal
+            text = re.sub(r'(dan\s+ayat)\s*\n\s*\(\s*(\d+[a-z]?)\s*(Pasal)\b', r'\1 (\2) \3', text, flags=re.IGNORECASE)
+            post_count_generic = len(re.findall(r'ayat\s*\n\s*\(\s*\d', text, flags=re.IGNORECASE))
+            post_count_dan = len(re.findall(r'dan\s+ayat\s*\n\s*\(\s*\d', text, flags=re.IGNORECASE))
+            _logger.info(f"  Remaining broken enumerations after fix: generic={post_count_generic}, dan={post_count_dan}")
+
+            # Log snippet around Perubahan 7 if present for debugging
+            perubahan_idx = text.lower().find('ketentuan ayat (2), ayat (3), ayat (5), ayat (6), ayat (7), dan ayat')
+            if perubahan_idx != -1:
+                snippet = text[perubahan_idx:perubahan_idx+320]
+                _logger.info("  Snippet Perubahan 7 after fixes: " + snippet.replace('\n', ' | '))
+
+            # Ensure continuity: keep 'yakni ayat (7a); serta penjelasan ...' on ONE line
+            # Remove unwanted newline if previously inserted
+            continuity_before = len(re.findall(r'yakni\s+ayat\s*\(7a\);\s*\n\s*serta\s+penjelasan', text, flags=re.IGNORECASE))
+            # First: join 'yakni ayat (7a);' with 'serta'
+            text = re.sub(r'(yakni\s+ayat\s*\(7a\);)\s*\n\s*(serta)', r'\1 \2', text, flags=re.IGNORECASE)
+            # Second: join 'serta' with 'penjelasan' (in case separated)
+            text = re.sub(r'(;\s*serta)\s*\n\s*(penjelasan\s+ayat)', r'\1 \2', text, flags=re.IGNORECASE)
+            # Third: full pattern match
+            text = re.sub(r'(yakni\s+ayat\s*\(7a\);)\s*\n\s*(serta\s+penjelasan\s+ayat\s*\(1\)\s+Pasal\s+43)', r'\1 \2', text, flags=re.IGNORECASE)
+            # Also normalize multiple spaces
+            text = re.sub(r'(yakni\s+ayat\s*\(7a\);)\s{2,}(serta\s+penjelasan)', r'\1 \2', text, flags=re.IGNORECASE)
+            continuity_after = len(re.findall(r'yakni\s+ayat\s*\(7a\);\s+serta\s+penjelasan', text, flags=re.IGNORECASE))
+            if continuity_before or continuity_after:
+                _logger.info(f"  Fixed 7a continuity: before_breaks={continuity_before}, after_continuous={continuity_after}")
 
             # Insert penjelasan into text if Penjelasan section exists
             # Check for both "PENJELASAN ATAS" and "Penjelasan" (case-insensitive)

@@ -38,7 +38,7 @@
             <field name="sequence">50</field>
         </record>
 
-        <!-- Sample Data -->
+        <!-- Sample Data
         <record id="sample_regulation_1" model="legal.regulation">
             <field name="tipe_dokumen">peraturan_perundang_undangan</field>
             <field name="judul">Peraturan Menteri Pemberdayaan Perempuan Dan Perlindungan Anak Republik Indonesia Nomor 3 Tahun 2025 Tentang Pedoman Umum Penyusunan Kebijakan Responsif Gender</field>
@@ -58,6 +58,6 @@
             <field name="lokasi">Kementerian Pemberdayaan Perempuan dan Perlindungan Anak</field>
             <field name="bidang">hukum_administrasi_negara</field>
         </record>
-
+        -->
     </data>
 </odoo>
