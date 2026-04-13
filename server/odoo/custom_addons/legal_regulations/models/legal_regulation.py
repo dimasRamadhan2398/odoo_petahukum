@@ -127,6 +127,14 @@ class LegalRegulation(models.Model):
                            default='Ringkasan belum tersedia',
                            help='Ringkasan singkat peraturan')
     
+    # Relasi Perubahan - untuk tracking UU yang mengubah UU ini
+    perubahan_dari_ids = fields.One2many(
+        'legal.regulation.perubahan',
+        'peraturan_induk_id',
+        string='Diubah Oleh',
+        help='Daftar UU/Peraturan yang mengubah peraturan ini'
+    )
+    
     # Computed Fields
     nama_lengkap = fields.Char('Nama Lengkap', compute='_compute_nama_lengkap', store=True)
     
@@ -2277,7 +2285,7 @@ class LegalRegulation(models.Model):
         except Exception as e:
             _logger.warning(f"Failed to insert penjelasan: {e}")
             return text
-        
+
     def _extract_text_from_txt(self, txt_data):
         """Extract and format text from TXT upload (base64-encoded)."""
         try:
@@ -2908,6 +2916,49 @@ class LegalRegulation(models.Model):
             'type': 'ir.actions.act_url',
             'url': f'/web/content?model=legal.regulation&id={self.id}&field=file_pdf&filename_field=file_name&download=true',
             'target': 'self',
+        }
+    
+    def action_create_consolidation(self):
+        """Buat konsolidasi V2 - langsung dari file TXT"""
+        self.ensure_one()
+        
+        # Validasi
+        if not self.file_txt:
+            from odoo.exceptions import UserError
+            raise UserError('Peraturan ini tidak memiliki file TXT. Upload file TXT terlebih dahulu di tab "File Dokumen".')
+        
+        if not self.perubahan_dari_ids:
+            from odoo.exceptions import UserError
+            raise UserError('Tidak ada perubahan yang tercatat. Tambahkan perubahan UU di tab "Perubahan UU" terlebih dahulu.')
+        
+        # Cek perubahan punya file TXT
+        perubahan_valid = self.perubahan_dari_ids.filtered(
+            lambda p: p.file_txt_perubahan or (p.peraturan_pengubah_id and p.peraturan_pengubah_id.file_txt)
+        )
+        
+        if not perubahan_valid:
+            from odoo.exceptions import UserError
+            raise UserError('Tidak ada perubahan yang memiliki file TXT. Upload file TXT perubahan terlebih dahulu.')
+        
+        # Buat nama default
+        default_name = f"Konsolidasi: {self.nama_lengkap}"
+        
+        # Buat record konsolidasi v2 langsung
+        consolidation = self.env['legal.regulation.consolidation.v2'].create({
+            'name': default_name,
+            'peraturan_induk_id': self.id,
+            'perubahan_ids': [(6, 0, perubahan_valid.ids)],
+            'display_mode': 'annotated',
+        })
+        
+        # Return action untuk buka form konsolidasi v2
+        return {
+            'name': 'Konsolidasi Peraturan',
+            'type': 'ir.actions.act_window',
+            'res_model': 'legal.regulation.consolidation.v2',
+            'res_id': consolidation.id,
+            'view_mode': 'form',
+            'target': 'current',
         }
     
     def action_reextract_pdf(self):

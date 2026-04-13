@@ -834,6 +834,332 @@
                         border-bottom: none;
                     }
                 </style>
+
+                <!-- ===== DEEP LINK / ANCHOR SYSTEM ===== -->
+                <style>
+                    /* Block-level linkable (headings, BAB, Pasal, full paragraphs) */
+                    .dl-block {
+                        position: relative;
+                        padding-left: 28px;
+                        margin-left: -28px;
+                        border-radius: 4px;
+                        transition: background-color 0.2s, box-shadow 0.2s;
+                    }
+                    .dl-block:hover {
+                        background-color: #f0f0f0;
+                        box-shadow: inset 3px 0 0 #6c757d;
+                    }
+
+                    /* Inline sentence linkable */
+                    .dl-sentence {
+                        border-radius: 3px;
+                        padding: 1px 3px;
+                        transition: background-color 0.2s;
+                    }
+                    .dl-sentence:hover {
+                        background-color: #e8e8e8;
+                    }
+
+                    /* Link button - block version */
+                    .dl-link-btn {
+                        display: none;
+                        position: absolute;
+                        left: 2px;
+                        top: 4px;
+                        background: #6c757d;
+                        color: white;
+                        border: none;
+                        border-radius: 4px;
+                        width: 22px;
+                        height: 22px;
+                        font-size: 11px;
+                        cursor: pointer;
+                        align-items: center;
+                        justify-content: center;
+                        z-index: 10;
+                        opacity: 0;
+                        transition: opacity 0.2s;
+                        user-select: none;
+                    }
+                    .dl-block:hover > .dl-link-btn {
+                        display: inline-flex;
+                        opacity: 0.7;
+                    }
+                    .dl-link-btn:hover {
+                        opacity: 1 !important;
+                        background: #343a40;
+                    }
+
+                    /* Link button - sentence version (inline) */
+                    .dl-sentence > .dl-link-btn {
+                        position: static;
+                        left: auto;
+                        top: auto;
+                        width: 16px;
+                        height: 16px;
+                        font-size: 9px;
+                        vertical-align: middle;
+                        margin-right: 2px;
+                    }
+                    .dl-sentence:hover > .dl-link-btn {
+                        display: inline-flex;
+                        opacity: 0.7;
+                    }
+
+                    /* Highlight when navigating via deep link */
+                    .dl-highlight {
+                        background-color: #fff3cd !important;
+                        box-shadow: inset 4px 0 0 #ffc107, 0 0 8px rgba(255,193,7,0.3) !important;
+                        animation: dlFade 5s ease forwards;
+                    }
+                    @keyframes dlFade {
+                        0%, 60% { background-color: #fff3cd; }
+                        100% { background-color: transparent; }
+                    }
+
+                    /* Toast notification */
+                    .dl-toast {
+                        position: fixed;
+                        bottom: 24px;
+                        right: 24px;
+                        background: #198754;
+                        color: #fff;
+                        padding: 12px 24px;
+                        border-radius: 8px;
+                        font-size: 14px;
+                        z-index: 99999;
+                        box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+                        pointer-events: none;
+                        animation: dlToastAnim 3s ease forwards;
+                    }
+                    @keyframes dlToastAnim {
+                        0% { opacity: 0; transform: translateY(20px); }
+                        10% { opacity: 1; transform: translateY(0); }
+                        75% { opacity: 1; }
+                        100% { opacity: 0; }
+                    }
+
+                    /* Don't show deep link stuff inside TOC sidebar */
+                    #toc-container .dl-block,
+                    #toc-container .dl-sentence { display: none; }
+                </style>
+
+                <!-- Deep Link JavaScript -->
+                <script>
+                    document.addEventListener('DOMContentLoaded', function() {
+                        var content = document.querySelector('.regulation-content-main');
+                        if (!content) return;
+
+                        var dlC = 0;
+
+                        // Generate unique slug ID from text
+                        function dlId(text) {
+                            dlC++;
+                            var s = text.substring(0, 50).toLowerCase()
+                                .replace(/[^a-z0-9\s]/g, '').trim().replace(/\s+/g, '-');
+                            return 's' + dlC + (s ? '-' + s : '');
+                        }
+
+                        // Show toast notification
+                        function dlToast(msg) {
+                            var t = document.createElement('div');
+                            t.className = 'dl-toast';
+                            t.textContent = msg;
+                            document.body.appendChild(t);
+                            setTimeout(function() { if (t.parentNode) t.remove(); }, 3200);
+                        }
+
+                        // Copy link to clipboard
+                        function dlCopy(elId) {
+                            var url = window.location.origin + window.location.pathname + '#' + elId;
+                            if (navigator.clipboard <![CDATA[&&]]> navigator.clipboard.writeText) {
+                                navigator.clipboard.writeText(url).then(function() {
+                                    dlToast('✓ Link berhasil disalin!');
+                                });
+                            } else {
+                                var ta = document.createElement('textarea');
+                                ta.value = url;
+                                ta.style.position = 'fixed';
+                                ta.style.left = '-9999px';
+                                document.body.appendChild(ta);
+                                ta.select();
+                                document.execCommand('copy');
+                                document.body.removeChild(ta);
+                                dlToast('✓ Link berhasil disalin!');
+                            }
+                        }
+
+                        // Add link button to element
+                        function dlBtn(el) {
+                            var b = document.createElement('button');
+                            b.className = 'dl-link-btn';
+                            b.innerHTML = '<i class="fa fa-link"></i>';
+                            b.title = 'Salin link ke bagian ini';
+                            var id = el.id;
+                            b.addEventListener('click', function(e) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                history.replaceState(null, null, '#' + id);
+                                dlCopy(id);
+                            });
+                            el.insertBefore(b, el.firstChild);
+                        }
+
+                        // Wrap element as linkable block
+                        function dlWrap(el) {
+                            if (el.classList.contains('dl-block')) return;
+                            if (!el.id) el.id = dlId(el.textContent);
+                            el.classList.add('dl-block');
+                            el.style.position = 'relative';
+                            dlBtn(el);
+                        }
+
+                        // Get direct text content (not from children)
+                        function dlDirect(el) {
+                            var r = [];
+                            var ch = el.childNodes;
+                            for (var i = 0; i <![CDATA[<]]> ch.length; i++) {
+                                if (ch[i].nodeType === 3) r.push(ch[i].textContent.trim());
+                            }
+                            return r.join(' ').trim();
+                        }
+
+                        // Get all text nodes from element (recursive)
+                        function dlTextNodes(el) {
+                            var res = [];
+                            var ch = el.childNodes;
+                            for (var i = 0; i <![CDATA[<]]> ch.length; i++) {
+                                if (ch[i].nodeType === 3 <![CDATA[&&]]> ch[i].textContent.trim().length > 0) {
+                                    res.push(ch[i]);
+                                } else if (ch[i].nodeType === 1 <![CDATA[&&]]> !ch[i].classList.contains('dl-sentence')) {
+                                    var sub = dlTextNodes(ch[i]);
+                                    for (var j = 0; j <![CDATA[<]]> sub.length; j++) res.push(sub[j]);
+                                }
+                            }
+                            return res;
+                        }
+
+                        // ── 1. Process headings (h1-h6) ──
+                        content.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach(function(el) {
+                            dlWrap(el);
+                        });
+
+                        // ── 2. Process big-text markers ──
+                        var bigRe = /^(BAB\s|Pasal\s|PEMBUKAAN|PENJELASAN|KETENTUAN|PENUTUP|Bagian\s|Paragraf\s)/i;
+                        content.querySelectorAll('p,div,span,b,strong,center').forEach(function(el) {
+                            if (el.classList.contains('dl-block')) return;
+                            if (el.closest('.dl-block')) return;
+                            var dt = dlDirect(el);
+                            if (bigRe.test(dt) <![CDATA[&&]]> dt.length <![CDATA[<]]> 200) {
+                                dlWrap(el);
+                            }
+                        });
+
+                        // ── 3. Paragraphs → split by sentence (per titik) ──
+                        content.querySelectorAll('p').forEach(function(p) {
+                            if (p.classList.contains('dl-block')) return;
+                            if (p.closest('table,pre,code,.dl-block')) return;
+                            var txt = p.textContent.trim();
+                            if (txt.length <![CDATA[<]]> 15) return;
+                            if (p.querySelector('.dl-block')) return;
+
+                            // If has complex children, wrap whole paragraph
+                            if (p.querySelector('a,img,table,div,ul,ol')) {
+                                dlWrap(p);
+                                return;
+                            }
+
+                            // Check if has multiple sentences
+                            if (txt.indexOf('. ') === -1) {
+                                dlWrap(p);
+                                return;
+                            }
+
+                            // Collect text nodes before modifying DOM
+                            var tns = dlTextNodes(p);
+
+                            tns.forEach(function(tn) {
+                                var text = tn.textContent;
+                                if (text.indexOf('. ') === -1) return;
+                                if (text.trim().length <![CDATA[<]]> 20) return;
+
+                                // Split by ". " keeping period with preceding text
+                                var rawParts = [];
+                                var rem = text;
+                                while (true) {
+                                    var di = rem.indexOf('. ');
+                                    if (di === -1) break;
+                                    rawParts.push(rem.substring(0, di + 1));
+                                    rem = rem.substring(di + 2);
+                                }
+                                if (rem.trim()) rawParts.push(rem);
+                                if (rawParts.length <![CDATA[<]]> 2) return;
+
+                                // Merge short segments (min 40 chars per sentence)
+                                var parts = [];
+                                var buffer = '';
+                                for (var k = 0; k <![CDATA[<]]> rawParts.length; k++) {
+                                    buffer += (buffer ? ' ' : '') + rawParts[k];
+                                    if (buffer.length >= 40 || k === rawParts.length - 1) {
+                                        parts.push(buffer);
+                                        buffer = '';
+                                    }
+                                }
+                                if (parts.length <![CDATA[<]]> 2) {
+                                    // Only 1 merged sentence, wrap whole paragraph
+                                    if (!p.classList.contains('dl-block')) dlWrap(p);
+                                    return;
+                                }
+
+                                // Create sentence spans
+                                var frag = document.createDocumentFragment();
+                                parts.forEach(function(part) {
+                                    var trimmed = part.trim();
+                                    if (trimmed.length <![CDATA[<]]> 10) {
+                                        frag.appendChild(document.createTextNode(part + ' '));
+                                        return;
+                                    }
+                                    var sp = document.createElement('span');
+                                    sp.className = 'dl-sentence';
+                                    sp.id = dlId(trimmed);
+                                    sp.textContent = part + ' ';
+                                    sp.style.position = 'relative';
+                                    sp.style.display = 'inline';
+                                    dlBtn(sp);
+                                    frag.appendChild(sp);
+                                });
+
+                                tn.parentNode.replaceChild(frag, tn);
+                            });
+                        });
+
+                        // ── 4. Handle URL hash (deep link navigation) ──
+                        function dlGoHash() {
+                            var h = window.location.hash.substring(1);
+                            if (!h) return;
+                            var tgt = document.getElementById(h);
+                            if (!tgt) return;
+
+                            var sc = document.querySelector('.regulation-content-main');
+                            if (!sc) return;
+
+                            setTimeout(function() {
+                                var cr = sc.getBoundingClientRect();
+                                var tr = tgt.getBoundingClientRect();
+                                sc.scrollTo({
+                                    top: sc.scrollTop + (tr.top - cr.top) - 60,
+                                    behavior: 'smooth'
+                                });
+                                tgt.classList.add('dl-highlight');
+                                setTimeout(function() { tgt.classList.remove('dl-highlight'); }, 5500);
+                            }, 700);
+                        }
+
+                        dlGoHash();
+                        window.addEventListener('hashchange', dlGoHash);
+                    });
+                </script>
+
             </t>
         </template>
         

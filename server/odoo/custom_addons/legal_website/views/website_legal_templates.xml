@@ -15,9 +15,9 @@
                                     
                                     <!-- Search Form -->
                                     <div class="legal-search-form">
-                                        <form action="/regulations" method="get" class="d-flex">
-                                            <input type="text" name="search" class="form-control form-control-sm me-2" t-att-value="search" placeholder="Cari informasi hukum..." required="required"/>
-                                            <button type="submit" class="btn btn-info btn-sm px-4">
+                                        <form action="/legal/search" method="get" class="d-flex">
+                                            <input type="text" name="q" class="form-control form-control-lg me-2" placeholder="Cari informasi hukum..." required="required"/>
+                                            <button type="submit" class="btn btn-warning btn-lg px-4">
                                                 <i class="fa fa-search me-2"></i>Cari
                                             </button>
                                         </form>

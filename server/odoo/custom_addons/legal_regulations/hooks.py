@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 
-def pre_init_hook(cr):
+def pre_init_hook(env):
     """Hook yang dijalankan sebelum install module"""
     print("[LEGAL_REGULATIONS] Starting compatibility check...")
+    
+    cr = env.cr
     
     # Check if table exists
     cr.execute("""
@@ -38,9 +40,11 @@ def pre_init_hook(cr):
     else:
         print("[LEGAL_REGULATIONS] New installation, table will be created.")
 
-def post_init_hook(cr, registry):
+def post_init_hook(env):
     """Hook yang dijalankan setelah install module"""
     print("[LEGAL_REGULATIONS] Running post-install compatibility updates...")
+    
+    cr = env.cr
     
     # Set default values for existing records
     try:

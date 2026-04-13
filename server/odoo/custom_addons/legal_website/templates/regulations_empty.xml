@@ -26,7 +26,7 @@
                                         <a href="/legal/articles" class="btn btn-outline-primary">
                                             <i class="fa fa-file-text"></i> Artikel Hukum
                                         </a>
-                                        <a href="/regulations/search" class="btn btn-outline-secondary">
+                                        <a href="/legal/search" class="btn btn-outline-secondary">
                                             <i class="fa fa-search"></i> Pencarian Web
                                         </a>
                                     </div>
