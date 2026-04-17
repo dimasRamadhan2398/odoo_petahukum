@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="action_run_scraper_manual" model="ir.actions.server">
+        <field name="name">Run Legal News Scraper</field>
+        <field name="model_id" ref="model_legal_article_scraper"/>
+        <field name="state">code</field>
+        <field name="code">model.run_all_scrapers()</field>
+    </record>
+
+    <menuitem id="legal_scraper_manual_action" name="Run Scraper Now"
+              parent="legal_scraper_menu"
+              action="action_run_scraper_manual" sequence="10"/>
+</odoo>

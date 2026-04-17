@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Add new fields to the form view -->
+    <record id="view_legal_article_form_inherit_scraper" model="ir.ui.view">
+        <field name="name">legal.article.form.inherit.scraper</field>
+        <field name="model">legal.article</field>
+        <field name="inherit_id" ref="legal_website.legal_article_view_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='category_id']" position="after">
+                <field name="article_type"/>
+                <field name="is_scraped" invisible="1"/>
+                <field name="source_url" attrs="{'invisible': [('is_scraped', '=', False)]}"/>
+                <field name="source_site" attrs="{'invisible': [('is_scraped', '=', False)]}"/>
+            </xpath>
+        </field>
+    </record>
+
+    <!-- Add filters to the search view -->
+    <record id="view_legal_article_search_inherit_scraper" model="ir.ui.view">
+        <field name="name">legal.article.search.inherit.scraper</field>
+        <field name="model">legal.article</field>
+        <field name="inherit_id" ref="legal_website.legal_article_view_search"/>
+        <field name="arch" type="xml">
+            <xpath expr="//search" position="inside">
+                <separator/>
+                <filter string="Our Blog" name="type_blog" domain="[('article_type', '=', 'blog')]"/>
+                <filter string="External News" name="type_news" domain="[('article_type', '=', 'news')]"/>
+                <group expand="0" string="Group By">
+                    <filter string="Article Type" name="group_by_type" context="{'group_by': 'article_type'}"/>
+                    <filter string="Source Site" name="group_by_source" context="{'group_by': 'source_site'}"/>
+                </group>
+            </xpath>
+        </field>
+    </record>
+
+    <!-- Actions for specific views -->
+    <record id="action_legal_blog" model="ir.actions.act_window">
+        <field name="name">Our Blogs</field>
+        <field name="res_model">legal.article</field>
+        <field name="view_mode">tree,form</field>
+        <field name="domain">[('article_type', '=', 'blog')]</field>
+        <field name="context">{'default_article_type': 'blog'}</field>
+    </record>
+
+    <record id="action_legal_news" model="ir.actions.act_window">
+        <field name="name">External News</field>
+        <field name="res_model">legal.article</field>
+        <field name="view_mode">tree,form</field>
+        <field name="domain">[('article_type', '=', 'news')]</field>
+        <field name="context">{'default_article_type': 'news'}</field>
+    </record>
+
+    <!-- Update Menus -->
+    <menuitem id="legal_blog_menu" name="Blogs"
+              parent="legal_website.legal_article_menu"
+              action="action_legal_blog" sequence="10"/>
+
+    <menuitem id="legal_news_menu" name="News"
+              parent="legal_website.legal_article_menu"
+              action="action_legal_news" sequence="20"/>
+
+    <menuitem id="legal_scraper_menu" name="Scraper Actions"
+              parent="legal_website.legal_article_menu"
+              sequence="30"/>
+</odoo>

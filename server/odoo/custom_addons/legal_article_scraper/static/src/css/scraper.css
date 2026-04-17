@@ -1,0 +1,25 @@
+.scraped-content {
+    font-family: inherit;
+    line-height: 1.6;
+}
+.scraped-content img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 8px;
+    margin: 15px 0;
+}
+.scraped-content p {
+    margin-bottom: 1rem;
+}
+.article-type-filters {
+    border-bottom: 1px solid #eee;
+    padding-bottom: 15px;
+}
+.badge-news {
+    background-color: #17a2b8;
+    color: white;
+}
+.badge-blog {
+    background-color: #28a745;
+    color: white;
+}
