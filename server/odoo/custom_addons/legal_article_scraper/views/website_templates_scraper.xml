@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Template to add filters to the main articles page -->
+    <template id="legal_articles_inherit_scraper" inherit_id="legal_website.legal_articles">
+        <!-- We use an xpath to target the area where we want to place the filters -->
+        <xpath expr="//div[hasclass('legal-articles-header')]" position="inside">
+            <div class="article-type-filters mt-3 mb-4">
+                <div class="btn-group" role="group" aria-label="Article Type Filter">
+                    <a t-attf-class="btn btn-sm #{not request.params.get('type') and 'btn-primary' or 'btn-outline-primary'}" href="/legal/articles">All</a>
+                    <a t-attf-class="btn btn-sm #{request.params.get('type') == 'blog' and 'btn-primary' or 'btn-outline-primary'}" href="/legal/articles?type=blog">Our Blog</a>
+                    <a t-attf-class="btn btn-sm #{request.params.get('type') == 'news' and 'btn-primary' or 'btn-outline-primary'}" href="/legal/articles?type=news">Indonesia Legal News</a>
+                </div>
+            </div>
+        </xpath>
+    </template>
+</odoo>
