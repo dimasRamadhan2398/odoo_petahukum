@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <!-- Form View -->
+        <record id="view_legal_expert_form" model="ir.ui.view">
+            <field name="name">legal.expert.form</field>
+            <field name="model">legal.expert</field>
+            <field name="arch" type="xml">
+                <form string="Legal Expert">
+                    <sheet>
+                        <field name="profile_picture" widget="image" class="oe_avatar" options="{'size': [90, 90]}"/>
+                        <div class="oe_title">
+                            <h1>
+                                <field name="name" placeholder="Name" required="1"/>
+                            </h1>
+                        </div>
+                        <group>
+                            <group>
+                                <field name="user_id"/>
+                                <field name="role"/>
+                                <field name="experience"/>
+                                <field name="ranking"/>
+                            </group>
+                            <group>
+                                <field name="handled_client"/>
+                                <field name="availability"/>
+                                <field name="service_fee"/>
+                            </group>
+                        </group>
+                        <notebook>
+                            <page string="Description">
+                                <field name="description" placeholder="Description of the Legal Expert"/>
+                            </page>
+                        </notebook>
+                    </sheet>
+                </form>
+            </field>
+        </record>
+
+        <!-- Tree View -->
+        <record id="view_legal_expert_tree" model="ir.ui.view">
+            <field name="name">legal.expert.tree</field>
+            <field name="model">legal.expert</field>
+            <field name="arch" type="xml">
+                <tree string="Legal Experts">
+                    <field name="name"/>
+                    <field name="role"/>
+                    <field name="experience"/>
+                    <field name="ranking"/>
+                    <field name="handled_client"/>
+                    <field name="availability"/>
+                    <field name="service_fee"/>
+                </tree>
+            </field>
+        </record>
+
+        <!-- Search View -->
+        <record id="view_legal_expert_search" model="ir.ui.view">
+            <field name="name">legal.expert.search</field>
+            <field name="model">legal.expert</field>
+            <field name="arch" type="xml">
+                <search string="Search Legal Experts">
+                    <field name="name"/>
+                    <field name="role"/>
+                    <filter string="Available" name="available" domain="[('availability','=',True)]"/>
+                    <group expand="0" string="Group By">
+                        <filter string="Role" name="group_by_role" context="{'group_by':'role'}"/>
+                    </group>
+                </search>
+            </field>
+        </record>
+
+        <!-- Action -->
+        <record id="action_legal_expert" model="ir.actions.act_window">
+            <field name="name">Legal Experts</field>
+            <field name="res_model">legal.expert</field>
+            <field name="view_mode">tree,form</field>
+            <field name="search_view_id" ref="view_legal_expert_search"/>
+            <field name="help" type="html">
+              <p class="o_view_nocontent_smiling_face">
+                Create a new Legal Expert
+              </p>
+            </field>
+        </record>
+
+        <!-- Menus -->
+        <menuitem id="menu_legal_expert_root" name="Legal Experts" sequence="10" web_icon="legal_expert_directory,static/description/icon.png"/>
+
+        <menuitem id="menu_legal_expert" name="Legal Experts" parent="menu_legal_expert_root" action="action_legal_expert" sequence="10"/>
+
+    </data>
+</odoo>

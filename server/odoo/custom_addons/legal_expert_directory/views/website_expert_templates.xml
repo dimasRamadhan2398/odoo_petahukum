@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <template id="website_expert_directory" name="Legal Expert Directory">
+            <t t-call="website.layout">
+                <div id="wrap">
+                    <div class="oe_structure">
+                        <section class="s_title pt32 pb32" data-vcss="001" data-snippet="s_title">
+                            <div class="container text-center">
+                                <h1>Legal Expert Directory</h1>
+                                <p class="lead">Find the right legal expert for your needs.</p>
+                            </div>
+                        </section>
+                    </div>
+
+                    <div class="container mt-4 mb-5">
+                        <div class="row mb-4">
+                            <div class="col-md-12 text-center">
+                                <a href="/legal/experts" t-attf-class="btn #{'btn-primary' if not current_role else 'btn-outline-primary'} mb-2">All Experts</a>
+                                <t t-foreach="roles.items()" t-as="role_item">
+                                    <a t-attf-href="/legal/experts?role=#{role_item[0]}"
+                                       t-attf-class="btn #{'btn-primary' if current_role == role_item[0] else 'btn-outline-primary'} mb-2 ml-1 mr-1">
+                                       <t t-esc="role_item[1]"/>
+                                    </a>
+                                </t>
+                            </div>
+                        </div>
+
+                        <div class="row">
+                            <t t-if="not experts">
+                                <div class="col-12 text-center">
+                                    <p class="text-muted">No legal experts found for this category.</p>
+                                </div>
+                            </t>
+                            <t t-foreach="experts" t-as="expert">
+                                <div class="col-lg-4 col-md-6 mb-4">
+                                    <div class="card h-100 shadow-sm">
+                                        <div class="card-img-top text-center pt-4">
+                                            <t t-if="expert.profile_picture">
+                                                <img t-att-src="image_data_uri(expert.profile_picture)" alt="Profile Picture" class="rounded-circle img-fluid" style="width: 150px; height: 150px; object-fit: cover; border: 3px solid #eee;"/>
+                                            </t>
+                                            <t t-else="">
+                                                <img src="/web/static/img/user_placeholder.jpg" alt="Profile Picture" class="rounded-circle img-fluid" style="width: 150px; height: 150px; object-fit: cover; border: 3px solid #eee;"/>
+                                            </t>
+                                        </div>
+                                        <div class="card-body text-center">
+                                            <h5 class="card-title font-weight-bold"><t t-esc="expert.name"/></h5>
+                                            <h6 class="card-subtitle mb-3 text-muted"><t t-esc="dict(expert._fields['role'].selection).get(expert.role)"/></h6>
+
+                                            <div class="row text-left mb-2 text-sm">
+                                                <div class="col-6"><strong>Experience:</strong></div>
+                                                <div class="col-6"><t t-esc="expert.experience"/> Years</div>
+                                            </div>
+                                            <div class="row text-left mb-2 text-sm">
+                                                <div class="col-6"><strong>Ranking:</strong></div>
+                                                <div class="col-6">
+                                                    <t t-esc="expert.ranking"/> / 5.0
+                                                </div>
+                                            </div>
+                                            <div class="row text-left mb-2 text-sm">
+                                                <div class="col-6"><strong>Clients:</strong></div>
+                                                <div class="col-6"><t t-esc="expert.handled_client"/></div>
+                                            </div>
+                                            <div class="row text-left mb-2 text-sm">
+                                                <div class="col-6"><strong>Availability:</strong></div>
+                                                <div class="col-6">
+                                                    <span t-if="expert.availability" class="badge badge-success">Available</span>
+                                                    <span t-else="" class="badge badge-danger">Not Available</span>
+                                                </div>
+                                            </div>
+                                            <div class="row text-left mb-2 text-sm">
+                                                <div class="col-6"><strong>Service Fee:</strong></div>
+                                                <div class="col-6">
+                                                    <t t-if="expert.service_fee > 0">
+                                                        Rp <t t-esc="expert.service_fee" t-options='{"widget": "float", "precision": 0}'/>
+                                                    </t>
+                                                    <t t-else="">
+                                                        Free / Contact
+                                                    </t>
+                                                </div>
+                                            </div>
+                                            <t t-if="expert.description">
+                                                <p class="card-text mt-3 text-left small text-muted" style="display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;">
+                                                    <t t-esc="expert.description"/>
+                                                </p>
+                                            </t>
+                                        </div>
+                                        <div class="card-footer bg-transparent border-top-0 text-center pb-4">
+                                            <a href="#" class="btn btn-outline-primary btn-block">Contact Expert</a>
+                                        </div>
+                                    </div>
+                                </div>
+                            </t>
+                        </div>
+                    </div>
+                </div>
+            </t>
+        </template>
+
+        <!-- Menu for Website -->
+        <record id="menu_legal_experts" model="website.menu">
+            <field name="name">Legal Experts</field>
+            <field name="url">/legal/experts</field>
+            <field name="parent_id" ref="website.main_menu"/>
+            <field name="sequence">45</field>
+        </record>
+
+    </data>
+</odoo>
