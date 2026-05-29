@@ -22,4 +22,8 @@ class LegalVerdict(models.Model):
 
     kategori = fields.Char(string='Kategori/Klasifikasi')
 
+    verdict_text = fields.Text(string='Teks Putusan')
+    txt_file = fields.Binary(string='File Teks (.txt)', attachment=True)
+    txt_filename = fields.Char(string='Nama File Teks')
+
     active = fields.Boolean(default=True)
