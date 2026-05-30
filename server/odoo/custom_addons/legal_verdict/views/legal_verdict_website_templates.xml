@@ -148,12 +148,22 @@
                                 </div>
                             </t>
 
+                            <t t-if="verdict.verdict_text">
+                                <h5 class="border-bottom pb-2 mt-4">Teks Putusan</h5>
+                                <div class="p-3 bg-light rounded text-justify" style="max-height: 500px; overflow-y: auto; white-space: pre-wrap; font-family: monospace; font-size: 0.9em;">
+                                    <t t-esc="verdict.verdict_text"/>
+                                </div>
+                            </t>
+
                             <div class="mt-5 d-flex gap-2 justify-content-center">
                                 <a t-if="verdict.link_url" t-att-href="verdict.link_url" target="_blank" class="btn btn-outline-primary">
                                     <i class="fa fa-external-link"/> Link Sumber Asli
                                 </a>
                                 <a t-if="verdict.file_url" t-att-href="verdict.file_url" target="_blank" class="btn btn-primary">
                                     <i class="fa fa-download"/> Download PDF
+                                </a>
+                                <a t-if="verdict.txt_file" t-attf-href="/web/content/legal.verdict/#{verdict.id}/txt_file/#{verdict.txt_filename}?download=true" class="btn btn-secondary">
+                                    <i class="fa fa-file-text-o"/> Download Teks (.txt)
                                 </a>
                             </div>
                         </div>

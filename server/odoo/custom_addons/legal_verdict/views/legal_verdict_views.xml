@@ -35,6 +35,13 @@
                         <page string="Deskripsi/Amar">
                             <field name="deskripsi"/>
                         </page>
+                        <page string="Teks Putusan">
+                            <group>
+                                <field name="txt_filename" invisible="1"/>
+                                <field name="txt_file" filename="txt_filename"/>
+                            </group>
+                            <field name="verdict_text"/>
+                        </page>
                     </notebook>
                 </sheet>
             </form>
