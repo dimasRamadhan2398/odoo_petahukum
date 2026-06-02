@@ -1,0 +1,445 @@
+        """Format extracted text into properly structured HTML"""
+        import re
+
+        if not text or not text.strip():
+            return ""
+
+        # Fix broken words first
+        text = self._fix_broken_words(text)
+
+        lines = text.split('\n')
+        html_parts = []
+        current_paragraph = []
+        in_list = False
+
+        # Patterns untuk mendeteksi struktur
+        # Pattern untuk numbering
+        numbering_pattern = re.compile(r'^\s*(\d+\.|[a-z]\.|[A-Z]\.|[ivxIVX]+\.|[(\d]+[\).]|[(\w]+[\).])\s+(.+)$')
+        # Pattern untuk BAB, Pasal (with optional letter suffix like 45A), Ayat, dll
+        section_pattern = re.compile(r'^\s*(BAB|PASAL|Pasal\s+\d+[A-Z]?|Ayat|Bagian|Paragraf|BAGIAN|PARAGRAF)(\s+(.+))?$', re.IGNORECASE)
+        # Pattern untuk header (ALL CAPS line)
+        header_pattern = re.compile(r'^[A-Z\s]{10,}$')
+        # Pattern untuk Mengingat/Menimbang - detect dengan atau tanpa titik dua
+        # Akan di-check pertama untuk priority tinggi
+        legal_intro_combined_pattern = re.compile(r'^\s*(Mengingat|Menimbang|Memperhatikan|Menetapkan|Memutuskan|Dengan Rahmat)\s*:?\s*(.*)$', re.IGNORECASE)
+
+        # State for penjelasan block rendering
+        in_penjelasan_block = False
+        penjelasan_lines = []
+        # Pattern for Pasal/Ayat/Huruf penjelasan
+        penjelasan_header_pat = re.compile(r'^\s*💡 \[Penjelasan\s+(Pasal|Ayat|Huruf)[^\]]*\]:\s*$', re.IGNORECASE)
+        # Pattern for Penjelasan Umum
+        penjelasan_umum_pat = re.compile(r'^\s*📘 \[Penjelasan Umum\]:\s*$', re.IGNORECASE)
+        # Pattern for alternative Penjelasan Umum format: "I. UMUM"
+        penjelasan_umum_alternative_pat = re.compile(r'^\s*I\.\s+UMUM\s*$', re.IGNORECASE)
+        # Pattern for subtitle "Dalam Undang-Undang ini yang dimaksud dengan:"
+        subtitle_pattern = re.compile(r'^\s*Dalam\s+Undang-Undang\s+ini\s+yang\s+dimaksud\s+dengan:\s*$', re.IGNORECASE)
+
+        def flush_current_paragraph():
+            nonlocal current_paragraph, in_list
+            if current_paragraph:
+                if isinstance(current_paragraph[0], tuple):
+                    para_text = ' '.join([item[0] if isinstance(item, tuple) else item for item in current_paragraph])
+                    indent_px = current_paragraph[0][1] if isinstance(current_paragraph[0], tuple) else 0
+                else:
+                    para_text = ' '.join(current_paragraph)
+                    indent_px = 0
+                if in_list:
+                    html_parts.append(f'<li style="margin-bottom: 0.5rem; padding-left: 2rem; text-indent: -2rem;">{para_text}</li>')
+                else:
+                    if indent_px > 0:
+                        html_parts.append(f'<p style="margin-left: {indent_px}px;">{para_text}</p>')
+                    else:
+                        html_parts.append(f'<p>{para_text}</p>')
+                current_paragraph = []
+
+        def flush_penjelasan_block():
+            nonlocal in_penjelasan_block, penjelasan_lines
+            if not in_penjelasan_block:
+                return
+            # First line is header, rest is content
+            header = penjelasan_lines[0].strip() if penjelasan_lines else ''
+            # Join content lines
+            content_raw = ' '.join([ln.strip() for ln in penjelasan_lines[1:]]).strip()
+
+            # Split by sentence breaks (. followed by capital letter) and wrap in <p> tags
+            # This creates paragraph spacing without breaking the blue box
+            paragraphs = re.split(r'\.\s+(?=[A-Z])', content_raw)
+            content_html = ''
+            for para in paragraphs:
+                if para.strip():
+                    # Add period back if it was removed by split
+                    para_text = para.strip()
+                    if not para_text.endswith('.'):
+                        para_text += '.'
+                    content_html += f'<p style="margin: 8px 0;">{para_text}</p>'
+
+            # Render styled block
+            html_parts.append(
+                '<div class="penjelasan" style="margin-top: 0.5rem; margin-bottom: 0.75rem; padding: 8px 12px; '
+                'background: #f4f8ff; border-left: 4px solid #0d6efd; border-radius: 2px;">'
+                f'<div style="font-weight: 600; color: #0d6efd; margin-bottom: 8px;">{header}</div>'
+                f'{content_html if content_html else ""}'
+                '</div>'
+            )
+            penjelasan_lines = []
+            in_penjelasan_block = False
+
+        for line in lines:
+            # PRESERVE LEADING SPACES for layout preservation
+            # Count leading spaces before stripping
+            leading_spaces = len(line) - len(line.lstrip())
+            stripped = line.strip()
+
+            # Handle penjelasan block rendering
+            if in_penjelasan_block:
+                # End of block on empty line
+                if not stripped:
+                    flush_penjelasan_block()
+                    # continue to next line without treating this as paragraph break
+                    continue
+                else:
+                    penjelasan_lines.append(line)
+                    continue
+
+            # Start of a penjelasan block (either Pasal/Ayat/Huruf or Umum)
+            if penjelasan_header_pat.match(stripped) or penjelasan_umum_pat.match(stripped) or penjelasan_umum_alternative_pat.match(stripped):
+                # Flush any open paragraph or list before starting
+                flush_current_paragraph()
+                if in_list:
+                    html_parts.append('</ul>')
+                    in_list = False
+                in_penjelasan_block = True
+                # For "I. UMUM" format, convert to standard format
+                if penjelasan_umum_alternative_pat.match(stripped):
+                    penjelasan_lines = ['📘 [Penjelasan Umum]:']
+                else:
+                    penjelasan_lines = [line]
+                continue
+
+            # Preserve empty lines as paragraph breaks
+            if not stripped:
+                # If we were inside penjelasan (should have been handled above), flush
+                if in_penjelasan_block:
+                    flush_penjelasan_block()
+                    continue
+                if current_paragraph:
+                    # Extract text and indentation from tuples
+                    if isinstance(current_paragraph[0], tuple):
+                        para_text = ' '.join([item[0] if isinstance(item, tuple) else item for item in current_paragraph])
+                        indent_px = current_paragraph[0][1] if isinstance(current_paragraph[0], tuple) else 0
+                    else:
+                        para_text = ' '.join(current_paragraph)
+                        indent_px = 0
+
+                    if in_list:
+                        # For list continuation, don't add margin (controlled by <ul>)
+                        html_parts.append(f'<li style="margin-bottom: 0.5rem; padding-left: 2rem; text-indent: -2rem;">{para_text}</li>')
+                    else:
+                        # Only add margin if there's actual indentation
+                        if indent_px > 0:
+                            html_parts.append(f'<p style="margin-left: {indent_px}px;">{para_text}</p>')
+                        else:
+                            html_parts.append(f'<p>{para_text}</p>')
+                    current_paragraph = []
+                elif in_list:
+                    # Empty line while in list - close the list
+                    html_parts.append('</ul>')
+                    in_list = False
+                continue
+
+            # SPECIAL CASE: Check if line contains legal intro word but doesn't start with it
+            # E.g., "PRESIDEN REPUBLIK INDONESIA, Menimbang" or "SK No 190185 A Mengingat"
+            legal_intro_words = ['Mengingat', 'Menimbang', 'Memperhatikan', 'Menetapkan', 'Memutuskan', 'Dengan Rahmat']
+            split_handled = False
+            for intro_word in legal_intro_words:
+                # Check if intro word appears but not at start (case-insensitive)
+                # Pattern 1: With comma before intro word
+                intro_pattern_with_comma = re.compile(r'^(.+?)\s*,\s*(' + intro_word + r')\b', re.IGNORECASE)
+                # Pattern 2: Without comma - intro word at end of line after some text
+                intro_pattern_no_comma = re.compile(r'^(.+?)\s+(' + intro_word + r')\s*:?\s*$', re.IGNORECASE)
+
+                split_match = intro_pattern_with_comma.match(stripped) or intro_pattern_no_comma.match(stripped)
+                if split_match:
+                    # Found intro word after other text - split the line
+                    before_part = split_match.group(1).strip()
+                    intro_part = split_match.group(2).strip()
+
+                    # Make sure before_part is not empty and intro_part is actually the intro word
+                    # Also check that before_part doesn't look like it's part of the intro phrase
+                    if not before_part or len(before_part) < 3:
+                        break
+
+                    # Process the "before" part first
+                    if current_paragraph:
+                        current_paragraph.append((before_part, indent_px))
+                    else:
+                        current_paragraph = [(before_part, indent_px)]
+
+                    # Flush current paragraph
+                    if isinstance(current_paragraph[0], tuple):
+                        para_text = ' '.join([item[0] if isinstance(item, tuple) else item for item in current_paragraph])
+                        indent_px_para = current_paragraph[0][1] if isinstance(current_paragraph[0], tuple) else 0
+                    else:
+                        para_text = ' '.join(current_paragraph)
+                        indent_px_para = 0
+
+                    if in_list:
+                        html_parts.append(f'<li style="margin-bottom: 0.5rem; padding-left: 2rem; text-indent: -2rem;">{para_text}</li>')
+                    else:
+                        if indent_px_para > 0:
+                            html_parts.append(f'<p style="margin-left: {indent_px_para}px;">{para_text}</p>')
+                        else:
+                            html_parts.append(f'<p>{para_text}</p>')
+                    current_paragraph = []
+
+                    if in_list:
+                        html_parts.append('</ul>')
+                        in_list = False
+
+                    # Now add the intro word as heading
+                    html_parts.append(f'<h6 class="mt-3 mb-2"><strong>{intro_part}:</strong></h6>')
+                    split_handled = True
+                    break  # Break from for loop
+
+            if split_handled:
+                continue  # Continue to next line
+
+            # Check for legal document intro patterns (Mengingat, Menimbang, etc.)
+            # Works with or without colon - HIGH PRIORITY check
+            legal_intro_match = legal_intro_combined_pattern.match(stripped)
+            if legal_intro_match:
+                if current_paragraph:
+                    # Extract text and indentation
+                    if isinstance(current_paragraph[0], tuple):
+                        para_text = ' '.join([item[0] if isinstance(item, tuple) else item for item in current_paragraph])
+                        indent_px = current_paragraph[0][1] if isinstance(current_paragraph[0], tuple) else 0
+                    else:
+                        para_text = ' '.join(current_paragraph)
+                        indent_px = 0
+
+                    if in_list:
+                        html_parts.append(f'<li style="margin-bottom: 0.5rem; padding-left: 2rem; text-indent: -2rem;">{para_text}</li>')
+                    else:
+                        # Only add margin if there's actual indentation
+                        if indent_px > 0:
+                            html_parts.append(f'<p style="margin-left: {indent_px}px;">{para_text}</p>')
+                        else:
+                            html_parts.append(f'<p>{para_text}</p>')
+                    current_paragraph = []
+
+                if in_list:
+                    html_parts.append('</ul>')
+                    in_list = False
+
+                intro_word = legal_intro_match.group(1)
+                rest = legal_intro_match.group(2).strip() if legal_intro_match.group(2) else ''
+
+                # Check if original had colon - preserve it in heading
+                has_colon = ':' in line and line.index(':') < line.index(intro_word) + len(intro_word) + 3
+                if has_colon or rest:
+                    # Had colon or has content after - add colon in heading
+                    html_parts.append(f'<h6 class="mt-3 mb-2"><strong>{intro_word}:</strong></h6>')
+                else:
+                    # No colon, standalone - add without colon
+                    html_parts.append(f'<h6 class="mt-3 mb-2"><strong>{intro_word}</strong></h6>')
+
+                # Check if there's numbering right after
+                if rest and numbering_pattern.match(rest):
+                    number_match = numbering_pattern.match(rest)
+                    if number_match:
+                        # Start new list
+                        html_parts.append('<ul style="list-style-type: none; padding-left: 0; margin-left: 1.5rem;">')
+                        in_list = True
+                        number = number_match.group(1)
+                        content = number_match.group(2)
+                        # Use table display for perfect alignment
+                        html_parts.append(f'<li style="margin-bottom: 0.5rem; display: table; width: 100%;"><span style="display: table-cell; width: 2rem; font-weight: bold; vertical-align: top;">{number}</span><span style="display: table-cell; word-wrap: break-word;">{content}</span></li>')
+                elif rest:
+                    html_parts.append(f'<p>{rest}</p>')
+
+                continue
+
+            # Check for subtitle pattern "Dalam Undang-Undang ini yang dimaksud dengan:"
+            subtitle_match = subtitle_pattern.match(stripped)
+            if subtitle_match:
+                if current_paragraph:
+                    flush_current_paragraph()
+
+                if in_list:
+                    html_parts.append('</ul>')
+                    in_list = False
+
+                # Render as italic paragraph (not bold, like Penjelasan Umum style)
+                html_parts.append(f'<p style="font-style: italic; margin-top: 10px; margin-bottom: 10px; color: #555;">{stripped}</p>')
+                continue
+
+            # Check for section headers (BAB, PASAL, etc.)
+            section_match = section_pattern.match(stripped)
+
+            # --- FIX: Hanya treat sebagai header jika PASAL berdiri sendiri ---
+            skip_section_header = False
+            # Support both numeric (Pasal 1, Pasal 45A) and Roman (Pasal I, Pasal II)
+            pasal_standalone_pattern = re.compile(r'^(Pasal|PASAL)\s+(?:\d+[A-Z]?|[IVX]+)\s*$', re.IGNORECASE)
+            is_pasal_line = pasal_standalone_pattern.match(stripped)
+
+            if section_match and is_pasal_line:
+                # Ini adalah "Pasal 45" atau "Pasal 45B" standalone - treat as header
+                if current_paragraph:
+                    # Extract text and indentation
+                    if isinstance(current_paragraph[0], tuple):
+                        para_text = ' '.join([item[0] if isinstance(item, tuple) else item for item in current_paragraph])
+                        indent_px = current_paragraph[0][1] if isinstance(current_paragraph[0], tuple) else 0
+                    else:
+                        para_text = ' '.join(current_paragraph)
+                        indent_px = 0
+
+                    if in_list:
+                        html_parts.append(f'<li style="margin-bottom: 0.5rem; padding-left: 2rem; text-indent: -2rem;">{para_text}</li>')
+                    else:
+                        # Only add margin if there's actual indentation
+                        if indent_px > 0:
+                            html_parts.append(f'<p style="margin-left: {indent_px}px;">{para_text}</p>')
+                        else:
+                            html_parts.append(f'<p>{para_text}</p>')
+                    current_paragraph = []
+
+                if in_list:
+                    html_parts.append('</ul>')
+                    in_list = False
+
+                html_parts.append(f'<h5 class="mt-3 mb-2"><strong>{stripped}</strong></h5>')
+                continue
+            elif section_match and not is_pasal_line:
+                # Section header lain (BAB, BAGIAN, dll) atau Pasal dengan teks tambahan
+                # Jika Pasal dengan teks (ex: "Pasal 45B Setiap Orang"), treat sebagai paragraf
+                if re.match(r'^(Pasal|PASAL)\s+\d+[A-Z]?\s+\w', stripped, re.IGNORECASE):
+                    # "Pasal 45B Setiap..." - treat as paragraph, not header
+                    current_paragraph.append((stripped, 0))
+                    continue
+                else:
+                    # BAB, BAGIAN, etc - treat as header
+                    if current_paragraph:
+                        # Extract text and indentation
+                        if isinstance(current_paragraph[0], tuple):
+                            para_text = ' '.join([item[0] if isinstance(item, tuple) else item for item in current_paragraph])
+                            indent_px = current_paragraph[0][1] if isinstance(current_paragraph[0], tuple) else 0
+                        else:
+                            para_text = ' '.join(current_paragraph)
+                            indent_px = 0
+
+                        if in_list:
+                            html_parts.append(f'<li style="margin-bottom: 0.5rem; padding-left: 2rem; text-indent: -2rem;">{para_text}</li>')
+                        else:
+                            # Only add margin if there's actual indentation
+                            if indent_px > 0:
+                                html_parts.append(f'<p style="margin-left: {indent_px}px;">{para_text}</p>')
+                            else:
+                                html_parts.append(f'<p>{para_text}</p>')
+                        current_paragraph = []
+
+                    if in_list:
+                        html_parts.append('</ul>')
+                        in_list = False
+
+                    html_parts.append(f'<h5 class="mt-3 mb-2"><strong>{stripped}</strong></h5>')
+                    continue
+
+            # Check for ALL CAPS header
+            if len(stripped) > 10 and header_pattern.match(stripped):
+                if current_paragraph:
+                    # Extract text and indentation
+                    if isinstance(current_paragraph[0], tuple):
+                        para_text = ' '.join([item[0] if isinstance(item, tuple) else item for item in current_paragraph])
+                        indent_px = current_paragraph[0][1] if isinstance(current_paragraph[0], tuple) else 0
+                    else:
+                        para_text = ' '.join(current_paragraph)
+                        indent_px = 0
+
+                    if in_list:
+                        html_parts.append(f'<li style="margin-bottom: 0.5rem; padding-left: 2rem; text-indent: -2rem;">{para_text}</li>')
+                    else:
+                        # Only add margin if there's actual indentation
+                        if indent_px > 0:
+                            html_parts.append(f'<p style="margin-left: {indent_px}px;">{para_text}</p>')
+                        else:
+                            html_parts.append(f'<p>{para_text}</p>')
+                    current_paragraph = []
+
+                if in_list:
+                    html_parts.append('</ul>')
+                    in_list = False
+
+                html_parts.append(f'<h6 class="mt-2 mb-2"><strong>{stripped}</strong></h6>')
+                continue
+
+            # Check for numbered/lettered lists - PRESERVE ORIGINAL FORMAT
+            numbering_match = numbering_pattern.match(stripped)
+            # Exception: "I. UMUM" should NOT be treated as numbering (will be handled by penjelasan check above)
+            if numbering_match and not penjelasan_umum_alternative_pat.match(stripped):
+                if current_paragraph:
+                    # Extract text and indentation
+                    if isinstance(current_paragraph[0], tuple):
+                        para_text = ' '.join([item[0] if isinstance(item, tuple) else item for item in current_paragraph])
+                        para_indent_px = current_paragraph[0][1] if isinstance(current_paragraph[0], tuple) else 0
+                    else:
+                        para_text = ' '.join(current_paragraph)
+                        para_indent_px = 0
+
+                    if in_list:
+                        # Apply hanging indent to multi-line content
+                        html_parts.append(f'<li style="margin-bottom: 0.5rem; padding-left: 2rem; text-indent: -2rem;">{para_text}</li>')
+                    else:
+                        html_parts.append(f'<p style="margin-left: {para_indent_px}px;">{para_text}</p>')
+                    current_paragraph = []
+
+                if not in_list:
+                    # Start new list with fixed left margin (no nested indentation)
+                    html_parts.append('<ul style="list-style-type: none; padding-left: 0; margin-left: 1.5rem;">')
+                    in_list = True
+
+                # Add list item with ORIGINAL numbering and hanging indent
+                # Use table display for perfect alignment
+                # For list items, DON'T add margin-left (already controlled by <ul>)
+                # Just use table display for proper alignment
+                number = numbering_match.group(1)
+                content = numbering_match.group(2)
+                html_parts.append(f'<li style="margin-bottom: 0.5rem; display: table; width: 100%;"><span style="display: table-cell; width: 2rem; font-weight: bold; vertical-align: top;">{number}</span><span style="display: table-cell; word-wrap: break-word;">{content}</span></li>')
+                continue
+
+            # If not a special pattern, accumulate into current paragraph
+            # This preserves line breaks within sections
+            # Store with indentation info
+            if leading_spaces > 0:
+                indent_px = leading_spaces * 8
+                current_paragraph.append((stripped, indent_px))
+            else:
+                current_paragraph.append((stripped, 0))
+
+        # Close any remaining content
+        # Flush penjelasan block if still open
+        if in_penjelasan_block:
+            flush_penjelasan_block()
+        if current_paragraph:
+            # Extract text and indentation
+            if isinstance(current_paragraph[0], tuple):
+                para_text = ' '.join([item[0] if isinstance(item, tuple) else item for item in current_paragraph])
+                indent_px = current_paragraph[0][1] if isinstance(current_paragraph[0], tuple) else 0
+            else:
+                para_text = ' '.join(current_paragraph)
+                indent_px = 0
+
+            if in_list:
+                # Apply hanging indent to closing content
+                html_parts.append(f'<li style="margin-bottom: 0.5rem; padding-left: 2rem; text-indent: -2rem;">{para_text}</li>')
+                html_parts.append('</ul>')
+            else:
+                # Only add margin if there's actual indentation
+                if indent_px > 0:
+                    html_parts.append(f'<p style="margin-left: {indent_px}px;">{para_text}</p>')
+                else:
+                    html_parts.append(f'<p>{para_text}</p>')
+        elif in_list:
+            html_parts.append('</ul>')
+
+        return ''.join(html_parts)

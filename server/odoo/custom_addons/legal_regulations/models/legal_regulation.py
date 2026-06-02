@@ -512,6 +512,23 @@ class LegalRegulation(models.Model):
         # Pattern for subtitle "Dalam Undang-Undang ini yang dimaksud dengan:"
         subtitle_pattern = re.compile(r'^\s*Dalam\s+Undang-Undang\s+ini\s+yang\s+dimaksud\s+dengan:\s*$', re.IGNORECASE)
 
+        # --- NEW PATTERNS START ---
+        # Pattern for generic regulation title: "UNDANG-UNDANG REPUBLIK INDONESIA NOMOR ... TENTANG ..."
+        title_pattern = re.compile(r'^(.*)\s+TENTANG\s+(.*)$', re.IGNORECASE)
+
+        # Pattern for "DENGAN RAHMAT TUHAN YANG MAHA ESA PRESIDEN REPUBLIK INDONESIA"
+        dengan_rahmat_pattern = re.compile(r'^\s*DENGAN\s+RAHMAT\s+TUHAN\s+YANG\s+MAHA\s+ESA\s+PRESIDEN\s+REPUBLIK\s+INDONESIA\s*$', re.IGNORECASE)
+
+        # Pattern for "Dengan Persetujuan Bersama DEWAN PERWAKILAN RAKYAT REPUBLIK INDONESIA dan PRESIDEN REPUBLIK INDONESIA"
+        persetujuan_pattern = re.compile(r'^\s*Dengan\s+Persetujuan\s+Bersama\s+DEWAN\s+PERWAKILAN\s+RAKYAT\s+REPUBLIK\s+INDONESIA\s+dan\s+PRESIDEN\s+REPUBLIK\s+INDONESIA\s*$', re.IGNORECASE)
+
+        # Pattern for signature block elements (right-aligned)
+        signature_pattern = re.compile(r'^\s*(Disahkan\s+di\s+|Ditetapkan\s+di\s+|PRESIDEN\s+REPUBLIK\s+INDONESIA,?|MENTERI\s+|DR\.\s+H\.\s+).*$', re.IGNORECASE)
+
+        # Let's override BAB / Section parsing logic
+        bab_pattern_precise = re.compile(r'^\s*(BAB|BAGIAN)\s+([IVXLCDM]+|\d+)\s+(.+)$', re.IGNORECASE)
+        # --- NEW PATTERNS END ---
+
         def flush_current_paragraph():
             nonlocal current_paragraph, in_list
             if current_paragraph:
@@ -592,6 +609,57 @@ class LegalRegulation(models.Model):
                     penjelasan_lines = ['📘 [Penjelasan Umum]:']
                 else:
                     penjelasan_lines = [line]
+                continue
+
+
+            # 1. Check for Regulation Title
+            title_match = title_pattern.match(stripped)
+            # Make sure it actually looks like a regulation title (has "NOMOR" and "TAHUN" or similar)
+            if title_match and re.search(r'(NOMOR|NO\.)', stripped, re.IGNORECASE):
+                flush_current_paragraph()
+                part1 = title_match.group(1).strip()
+                part2 = title_match.group(2).strip()
+                html_parts.append(f'<p style="text-align: center; font-weight: bold;">{part1}</p>')
+                html_parts.append(f'<p style="text-align: center; font-weight: bold;">TENTANG</p>')
+                html_parts.append(f'<p style="text-align: center; font-weight: bold;">{part2}</p>')
+                continue
+
+            # 2. Check for "DENGAN RAHMAT TUHAN YANG MAHA ESA PRESIDEN REPUBLIK INDONESIA"
+            if dengan_rahmat_pattern.match(stripped):
+                flush_current_paragraph()
+                html_parts.append('<p style="text-align: center;">DENGAN RAHMAT TUHAN YANG MAHA ESA</p>')
+                html_parts.append('<p style="text-align: center;">PRESIDEN REPUBLIK INDONESIA</p>')
+                continue
+
+            # 3. Check for "Dengan Persetujuan Bersama DEWAN PERWAKILAN RAKYAT REPUBLIK INDONESIA dan PRESIDEN REPUBLIK INDONESIA"
+            if persetujuan_pattern.match(stripped):
+                flush_current_paragraph()
+                html_parts.append('<p style="text-align: center;">Dengan Persetujuan Bersama DEWAN PERWAKILAN RAKYAT REPUBLIK INDONESIA</p>')
+                html_parts.append('<p style="text-align: center;">dan</p>')
+                html_parts.append('<p style="text-align: center;">PRESIDEN REPUBLIK INDONESIA</p>')
+                continue
+
+            # 4. Check for MEMUTUSKAN standing alone or with colon
+            if re.match(r'^\s*MEMUTUSKAN\s*:?\s*$', stripped, re.IGNORECASE):
+                flush_current_paragraph()
+                html_parts.append(f'<p style="text-align: center; font-weight: bold;">{stripped}</p>')
+                continue
+
+            # 5. Check for Signature Blocks (right-aligned)
+            if signature_pattern.match(stripped) and len(stripped) > 5:
+                flush_current_paragraph()
+                html_parts.append(f'<p style="text-align: right;">{stripped}</p>')
+                continue
+
+            # 6. Check for BAB with Title inline (e.g. "BAB I KETENTUAN UMUM")
+            bab_match = bab_pattern_precise.match(stripped)
+            if bab_match:
+                flush_current_paragraph()
+                bab_type = bab_match.group(1).upper()
+                bab_num = bab_match.group(2)
+                bab_title = bab_match.group(3)
+                html_parts.append(f'<p style="text-align: center; font-weight: bold;">{bab_type} {bab_num}</p>')
+                html_parts.append(f'<p style="text-align: center; font-weight: bold;">{bab_title}</p>')
                 continue
 
             # Preserve empty lines as paragraph breaks
@@ -785,7 +853,7 @@ class LegalRegulation(models.Model):
                     html_parts.append('</ul>')
                     in_list = False
                 
-                html_parts.append(f'<h5 class="mt-3 mb-2"><strong>{stripped}</strong></h5>')
+                html_parts.append(f'<h5 class="mt-3 mb-2" style="text-align: center;"><strong>{stripped}</strong></h5>')
                 continue
             elif section_match and not is_pasal_line:
                 # Section header lain (BAB, BAGIAN, dll) atau Pasal dengan teks tambahan
@@ -819,7 +887,7 @@ class LegalRegulation(models.Model):
                         html_parts.append('</ul>')
                         in_list = False
                     
-                    html_parts.append(f'<h5 class="mt-3 mb-2"><strong>{stripped}</strong></h5>')
+                    html_parts.append(f'<h5 class="mt-3 mb-2" style="text-align: center;"><strong>{stripped}</strong></h5>')
                     continue
             
             # Check for ALL CAPS header
@@ -876,12 +944,20 @@ class LegalRegulation(models.Model):
                     in_list = True
                 
                 # Add list item with ORIGINAL numbering and hanging indent
-                # Use table display for perfect alignment
-                # For list items, DON'T add margin-left (already controlled by <ul>)
-                # Just use table display for proper alignment
                 number = numbering_match.group(1)
                 content = numbering_match.group(2)
-                html_parts.append(f'<li style="margin-bottom: 0.5rem; display: table; width: 100%;"><span style="display: table-cell; width: 2rem; font-weight: bold; vertical-align: top;">{number}</span><span style="display: table-cell; word-wrap: break-word;">{content}</span></li>')
+
+                # Determine extra margin based on number type (huruf vs angka)
+                # default margin is handled by the ul
+                margin_left_extra = ""
+                # If it's a lowercase letter like "a.", "b."
+                if re.match(r'^[a-z]\.$', number):
+                    margin_left_extra = " margin-left: 2rem;"
+                # If it's a number like "1.", "2."
+                elif re.match(r'^\d+\.$', number):
+                    margin_left_extra = " margin-left: 4rem;"
+
+                html_parts.append(f'<li style="margin-bottom: 0.5rem; display: table; width: 100%;{margin_left_extra}"><span style="display: table-cell; width: 2rem; font-weight: bold; vertical-align: top;">{number}</span><span style="display: table-cell; word-wrap: break-word;">{content}</span></li>')
                 continue
             
             # If not a special pattern, accumulate into current paragraph
