@@ -54,45 +54,106 @@ class LegalScraper(models.Model):
             self.log += f"Error converting PDF to text: {str(e)}\n"
             return ""
 
+    def _parse_bpk_date(self, date_str):
+        if not date_str:
+            return False
+        months = {
+            'januari': '01', 'februari': '02', 'maret': '03', 'april': '04',
+            'mei': '05', 'juni': '06', 'juli': '07', 'agustus': '08',
+            'september': '09', 'oktober': '10', 'november': '11', 'desember': '12'
+        }
+        date_str = date_str.lower().strip()
+        for id_month, num_month in months.items():
+            if id_month in date_str:
+                date_str = date_str.replace(id_month, num_month)
+                break
+
+        try:
+            parts = date_str.split()
+            if len(parts) >= 3:
+                day, month, year = parts[0], parts[1], parts[2]
+                return f"{year}-{month.zfill(2)}-{day.zfill(2)}"
+            elif "-" in date_str and len(date_str) == 10:
+                # Already YYYY-MM-DD
+                return date_str
+        except Exception:
+            pass
+        return False
+
+    def _get_any_key(self, item, keys, default=""):
+        for k in keys:
+            for item_key in item:
+                if k in item_key.lower():
+                    return item[item_key]
+        return default
+
     def _parse_regulation_data(self, item):
         """Helper to map scraped HTML data from BPK to legal.regulation format"""
-        # Map bentuk
-        bentuk_raw = item.get('bentuk', '')
+        # BPK uses various keys, need flexible extraction
+        bentuk_raw = self._get_any_key(item, ['bentuk', 'jenis peraturan', 'jenis/bentuk'], '')
+
+        # Determine bentuk_singkat and tipe_dokumen
         bentuk_singkat = 'Lainnya'
-        if 'Undang-Undang' in bentuk_raw:
-            bentuk_singkat = 'UU'
-        elif 'Peraturan Pemerintah' in bentuk_raw:
-            bentuk_singkat = 'PP'
-        elif 'Peraturan Presiden' in bentuk_raw:
-            bentuk_singkat = 'Perpres'
-        elif 'Keputusan Presiden' in bentuk_raw:
-            bentuk_singkat = 'Keppres'
-        elif 'Instruksi Presiden' in bentuk_raw:
-            bentuk_singkat = 'Inpres'
-
         tipe_dokumen = 'undang_undang'
-        if bentuk_singkat == 'PP':
-            tipe_dokumen = 'peraturan_pemerintah'
-        elif bentuk_singkat == 'Perpres':
-            tipe_dokumen = 'peraturan_presiden'
-        elif bentuk_singkat == 'Keppres':
-            tipe_dokumen = 'keputusan_presiden'
-        elif bentuk_singkat == 'Inpres':
-            tipe_dokumen = 'instruksi_presiden'
+        b_lower = bentuk_raw.lower()
 
-        # Parse fields with safe fallbacks
+        if 'undang-undang' in b_lower:
+            bentuk_singkat = 'UU'
+            tipe_dokumen = 'undang_undang'
+        elif 'peraturan pemerintah pengganti undang-undang' in b_lower or 'perpu' in b_lower:
+            bentuk_singkat = 'Perpu'
+            tipe_dokumen = 'perpu'
+        elif 'peraturan pemerintah' in b_lower:
+            bentuk_singkat = 'PP'
+            tipe_dokumen = 'peraturan_pemerintah'
+        elif 'peraturan presiden' in b_lower:
+            bentuk_singkat = 'Perpres'
+            tipe_dokumen = 'peraturan_presiden'
+        elif 'keputusan presiden' in b_lower:
+            bentuk_singkat = 'Keppres'
+            tipe_dokumen = 'keputusan_presiden'
+        elif 'instruksi presiden' in b_lower:
+            bentuk_singkat = 'Inpres'
+            tipe_dokumen = 'instruksi_presiden'
+        elif 'peraturan menteri' in b_lower:
+            bentuk_singkat = 'Permen'
+            tipe_dokumen = 'peraturan_menteri'
+        elif 'keputusan menteri' in b_lower:
+            bentuk_singkat = 'Kepmen'
+            tipe_dokumen = 'keputusan_menteri'
+        elif 'peraturan daerah' in b_lower:
+            bentuk_singkat = 'Perda'
+            tipe_dokumen = 'peraturan_daerah'
+        elif 'peraturan gubernur' in b_lower:
+            bentuk_singkat = 'Pergub'
+            tipe_dokumen = 'peraturan_gubernur'
+
+        # Safely parse numeric fields
+        nomor_raw = self._get_any_key(item, ['nomor peraturan', 'nomor'], '0')
+        tahun_raw = self._get_any_key(item, ['tahun peraturan', 'tahun'], '2023')
+
+        try:
+            tahun_int = int("".join(filter(str.isdigit, tahun_raw)))
+        except ValueError:
+            tahun_int = 2023
+
+        # Parse T.E.U (Badan / Pengarang)
+        teu_raw = self._get_any_key(item, ['t.e.u. badan/pengarang', 't.e.u', 'badan'], 'Indonesia')
+
+        # Parse Fields
         data = {
-            'judul': item.get('judul', f"Peraturan {item.get('nomor', '')}"),
-            'teu': item.get('t.e.u badan/pengarang', 'Indonesia'),
-            'nomor': item.get('nomor', '0'),
+            'judul': self._get_any_key(item, ['judul'], f"Peraturan {nomor_raw}"),
+            'teu': teu_raw,
+            'nomor': nomor_raw,
             'bentuk': bentuk_raw or 'Peraturan',
             'bentuk_singkat': bentuk_singkat,
-            'tahun': int(item.get('tahun', 0)) if str(item.get('tahun', '')).isdigit() else 2023,
-            'tempat_penetapan': item.get('tempat penetapan', 'Jakarta'),
-            'tanggal_penetapan': item.get('tanggal penetapan') or False,
-            'tanggal_pengundangan': item.get('tanggal pengundangan') or False,
-            'sumber': item.get('sumber', ''),
-            'subjek': item.get('subjek', ''),
+            'tahun': tahun_int,
+            'tempat_penetapan': self._get_any_key(item, ['tempat penetapan', 'tempat'], 'Jakarta'),
+            'tanggal_penetapan': self._parse_bpk_date(self._get_any_key(item, ['tanggal ditetapkankan', 'tanggal penetapan'])),
+            'tanggal_pengundangan': self._parse_bpk_date(self._get_any_key(item, ['tanggal diundangkan', 'tanggal pengundangan'])),
+            'tanggal_berlaku': self._parse_bpk_date(self._get_any_key(item, ['berlaku tanggal', 'tanggal berlaku'])),
+            'sumber': self._get_any_key(item, ['sumber']),
+            'subjek': self._get_any_key(item, ['subjek']),
             'status': 'berlaku', # Default if not specified
             'bahasa': 'bahasa_indonesia',
             'lokasi': 'Kementerian/Lembaga',
@@ -111,29 +172,55 @@ class LegalScraper(models.Model):
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             }
 
-            self.log += f"Fetching search URL: {self.target_url}\n"
-            response = requests.get(self.target_url, headers=headers, timeout=20, verify=False)
+            base_target_url = self.target_url
+            page = 1
+            has_more_pages = True
+            all_detail_links = []
+            mock_mode = False
 
-            detail_links = []
+            # Limit total pages to scrape to prevent infinite loops / excessive time
+            MAX_PAGES = 10
 
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.text, 'html.parser')
-                links = soup.find_all('a', href=True)
-                # Find all links to detail pages
-                detail_links = ["https://peraturan.bpk.go.id" + a['href'] for a in links if '/Details/' in a['href']]
-                self.log += f"Found {len(detail_links)} detail links.\n"
-            else:
-                self.log += f"API connection failed (Status {response.status_code}). BPK Cloudflare might be blocking.\n"
-                # Fallback to mock data to demonstrate the flow
+            self.log += "Fetching paginated search results...\n"
+            while has_more_pages and page <= MAX_PAGES:
+                # Append page parameter if necessary
+                separator = "&" if "?" in base_target_url else "?"
+                current_url = f"{base_target_url}{separator}page={page}"
+
+                self.log += f"Fetching Page {page}: {current_url}\n"
+                response = requests.get(current_url, headers=headers, timeout=20, verify=False)
+
+                if response.status_code == 200:
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    links = soup.find_all('a', href=True)
+                    page_detail_links = ["https://peraturan.bpk.go.id" + a['href'] for a in links if '/Details/' in a['href']]
+
+                    if not page_detail_links:
+                        self.log += f"No detail links found on page {page}. Stopping pagination.\n"
+                        has_more_pages = False
+                    else:
+                        all_detail_links.extend(page_detail_links)
+                        self.log += f"Found {len(page_detail_links)} detail links on page {page}.\n"
+                        page += 1
+
+                        # Stop if we hit an exact page logic indicating no more next pages,
+                        # but BPK usually returns empty lists or repeats when out of bounds.
+                else:
+                    self.log += f"API connection failed (Status {response.status_code}) on page {page}. BPK Cloudflare might be blocking.\n"
+                    mock_mode = True
+                    has_more_pages = False
+
+            if mock_mode:
                 self.log += f"Using fallback mock detail link.\n"
-                detail_links = ["mock_bpk_detail_url"]
-
-            # Process a limited number of items to avoid timeout during tests
-            detail_links = detail_links[:3]
+                all_detail_links = ["mock_bpk_detail_url", "mock_bpk_detail_url_2"]
+            else:
+                self.log += f"Total detail links aggregated across pages: {len(all_detail_links)}.\n"
 
             created_count = 0
 
-            for detail_url in detail_links:
+            # The user requested to pull the 10 regulatory data that are on each page from all pages.
+            # `all_detail_links` now contains all found links across the paginated search query.
+            for detail_url in all_detail_links:
                 item_data = {}
                 pdf_url = ""
 
@@ -147,7 +234,20 @@ class LegalScraper(models.Model):
                         'tempat penetapan': 'Pekalongan',
                         'tanggal penetapan': '2021-06-15',
                     }
-                    # We will mock the PDF generation below
+                elif detail_url == "mock_bpk_detail_url_2":
+                    item_data = {
+                        'judul': 'Undang-Undang (UU) Nomor 12 Tahun 2025 tentang Kabupaten Minahasa di Provinsi Sulawesi Utara',
+                        'jenis peraturan': 'Undang-Undang (UU)',
+                        'nomor peraturan': '12',
+                        'tahun peraturan': '2025',
+                        't.e.u. badan/pengarang': 'Pemerintah Pusat',
+                        'tanggal ditetapkankan': '20 Agustus 2025',
+                        'tanggal diundangkan': '20 Agustus 2025',
+                        'berlaku tanggal': '20 Agustus 2025',
+                        'tempat penetapan': 'Jakarta',
+                        'sumber': 'LN.2025/No.12, TLN No.1234',
+                        'subjek': 'PEMERINTAH DAERAH - KABUPATEN MINAHASA'
+                    }
                 else:
                     self.log += f"Fetching detail page: {detail_url}\n"
                     detail_resp = requests.get(detail_url, headers=headers, timeout=20, verify=False)
@@ -180,7 +280,7 @@ class LegalScraper(models.Model):
                 # Download PDF if URL was found or mocked
                 pdf_bytes = None
 
-                if detail_url == "mock_bpk_detail_url":
+                if mock_mode and detail_url.startswith("mock_bpk_detail_url"):
                     # Generate a dummy PDF for mock flow
                     from reportlab.pdfgen import canvas
                     mock_pdf_buffer = io.BytesIO()
